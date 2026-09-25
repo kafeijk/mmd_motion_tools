@@ -79,3 +79,56 @@ def select_bake_bone(armature, mode):
     # 恢复原模式
     if original_mode != 'POSE':
         bpy.ops.object.mode_set(mode=original_mode)
+
+
+class FlipPoseOperator(bpy.types.Operator):
+    bl_idname = "mmd_motion_tools.flip_pose"
+    bl_label = "翻转姿态"
+    bl_description = "翻转姿态"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        armature = self.check_props(context)
+        if not armature:
+            return {'CANCELLED'}
+        self.flip_bone(armature)
+        return {'FINISHED'}
+
+    def flip_bone(self, armature):
+        # 未启用 MMD Tools 则当做普通模型
+        if not is_mmd_tools_enabled():
+            bpy.ops.pose.copy()
+            bpy.ops.pose.paste(flipped=True)
+            return
+
+        root = find_pmx_root_with_child(armature)
+        if root:
+            bpy.ops.mmd_tools.flip_pose()
+        else:
+            bpy.ops.pose.copy()
+            bpy.ops.pose.paste(flipped=True)
+
+    def get_armature(self, context):
+        obj = context.active_object
+
+        if not obj or obj.type != 'ARMATURE':
+            self.report({'ERROR'}, '请选择骨架对象!')
+            return None
+
+        if context.mode != 'POSE':
+            self.report({'ERROR'}, '请进入姿态模式!')
+            return None
+
+        bones = get_selected_bones(obj)
+        if not bones:
+            self.report({'ERROR'}, '请选择骨骼!')
+            return None
+
+        return obj
+
+    def check_props(self, context):
+        armature = self.get_armature(context)
+        if not armature:
+            return None
+
+        return armature

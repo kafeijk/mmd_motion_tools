@@ -113,6 +113,10 @@ def set_visibility(obj, visibility):
     obj.hide_render = visibility[3]
 
 
+def get_selected_bones(armature):
+    return [pb for pb in armature.pose.bones if is_pose_bone_selected(pb)]
+
+
 def select_pose_bone(pb, status):
     """
     选中/取消选中姿态模式下骨骼

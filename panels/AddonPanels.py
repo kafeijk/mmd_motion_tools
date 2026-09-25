@@ -1,6 +1,4 @@
-import addon_utils
-
-from ..operators.bone_operators import SimplifyBoneOperator
+from ..operators.bone_operators import SimplifyBoneOperator, FlipPoseOperator
 from ..operators.motion_fixer_operators import MotionFixerOperator, CopyRangeOperator
 from ..utils import *
 
@@ -22,7 +20,7 @@ class ToolsPanel(bpy.types.Panel):
         row = col.row(align=True)
         split = row.split(factor=0.5, align=True)
         left = split.row(align=True)
-        left.operator(SimplifyBoneOperator.bl_idname, text=SimplifyBoneOperator.bl_label, icon="HIDE_OFF")
+        left.operator(SimplifyBoneOperator.bl_idname, text=SimplifyBoneOperator.bl_label, icon="GROUP_BONE")
 
         if is_mmd_tools_enabled():
             right = split.row(align=True)
@@ -38,6 +36,11 @@ class ToolsPanel(bpy.types.Panel):
             row = col.row(align=True)
             row.operator("mmd_tools.import_vmd", text="动作导入", icon='ANIM')
             row.operator("mmd_tools.export_vmd", text="动作导出", icon='ANIM')
+
+            row = col.row(align=True)
+            split = row.split(factor=0.5, align=True)
+            left = split.row(align=True)
+            left.operator(FlipPoseOperator.bl_idname, text=FlipPoseOperator.bl_label, icon="ARROW_LEFTRIGHT")
 
 
 class MotionFixer_PT_Panel(bpy.types.Panel):

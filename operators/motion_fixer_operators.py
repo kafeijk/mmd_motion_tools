@@ -9,7 +9,7 @@ class MotionBaseOperator:
         if not armature:
             return None
 
-        bones = self.get_selected_bones(armature)
+        bones = get_selected_bones(armature)
 
         if not bones:
             self.report({'ERROR'}, '请选择骨骼!')
@@ -43,9 +43,6 @@ class MotionBaseOperator:
             return None
 
         return obj
-
-    def get_selected_bones(self, armature):
-        return [pb for pb in armature.pose.bones if is_pose_bone_selected(pb)]
 
     def get_selected_frames(self, action, bone_name):
         """获取指定骨骼选中的关键帧范围"""
