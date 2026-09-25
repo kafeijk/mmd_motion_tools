@@ -111,7 +111,7 @@ class MotionFixerOperator(MotionBaseOperator, bpy.types.Operator):
         # 获取影响范围
         frames = self.get_selected_frames(action, pb.name)
         if not frames:
-            self.report({'ERROR'}, '未检测到选中的关键帧!')
+            self.report({'ERROR'}, '请选择关键帧!')
             return False
         frame_start = min(frames)
         frame_end = max(frames)
