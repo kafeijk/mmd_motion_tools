@@ -50,7 +50,8 @@ class MotionBaseOperator:
     def get_selected_frames(self, action, bone_name):
         """获取指定骨骼选中的关键帧范围"""
 
-        frames = set()
+        selected_frames = set()
+        all_frames = set()
         path = f'pose.bones["{bone_name}"]'
 
         for fc in action.fcurves:
@@ -58,23 +59,26 @@ class MotionBaseOperator:
                 continue
 
             for kp in fc.keyframe_points:
-                if kp.select_control_point or kp.select_left_handle or kp.select_right_handle:
-                    frames.add(int(kp.co[0]))
+                frame = int(kp.co[0])
+                all_frames.add(frame)
 
-        # 无数据
-        if not frames:
+                if kp.select_control_point or kp.select_left_handle or kp.select_right_handle:
+                    selected_frames.add(frame)
+
+        # 无选中关键帧
+        if not selected_frames:
             return None
 
-        frames = sorted(frames)
+        start = min(selected_frames)
+        end = max(selected_frames)
 
-        start = frames[0]
-        end = frames[-1]
+        # 检查范围内是否存在未选中的关键帧
+        unselected = all_frames - selected_frames
+        for frame in unselected:
+            if start < frame < end:
+                return set()
 
-        # 多个范围
-        if len(frames) != end - start + 1:
-            return set()
-
-        return frames
+        return sorted(selected_frames)
 
 
 class MotionFixerOperator(MotionBaseOperator, bpy.types.Operator):
