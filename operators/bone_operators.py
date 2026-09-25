@@ -4,12 +4,12 @@ from ..utils import *
 class SimplifyBoneOperator(bpy.types.Operator):
     bl_idname = "mmd_motion_tools.simplify_bone"
     bl_label = "精简骨骼"
-    bl_description = "选择用于K帧的骨骼"
+    bl_description = "隐藏不参与K帧的骨骼"
     bl_options = {'REGISTER', 'UNDO'}
 
     bake_mode: bpy.props.EnumProperty(
         name="显示范围",
-        description="精简骨骼显示时保留的骨骼",
+        description="参与K帧的骨骼",
         items=[
             ("ARM1", "手臂", "选择手臂骨骼（不含捩骨）"),
             ("ARM2", "手臂（含捩骨）", "选择手臂骨骼（包含捩骨）"),

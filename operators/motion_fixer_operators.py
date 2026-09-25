@@ -81,12 +81,11 @@ class MotionBaseOperator:
 class MotionFixerOperator(MotionBaseOperator, bpy.types.Operator):
     bl_idname = "mmd_motion_tools.fix_motion"
     bl_label = "应用修改"
-    bl_description = "应用修改"
     bl_options = {'REGISTER', 'UNDO'}
 
     margin: bpy.props.IntProperty(
         name="边距",
-        description="设置边距",
+        description="边距",
         default=3,
         min=0,
     )
@@ -96,8 +95,17 @@ class MotionFixerOperator(MotionBaseOperator, bpy.types.Operator):
         options={'HIDDEN'},
     )
 
+    @classmethod
+    def description(cls, context, properties):
+        if properties.type == "FIX":
+            return "计算活动骨骼当前姿态与关键帧姿态的差值，并将该变化应用到选中的关键帧上"
+
+        if properties.type == "REMOVE":
+            return "删除选中关键帧前后指定边距范围内的关键帧"
+
+        return "应用修改"
+
     def execute(self, context):
-        # TODO 翻转姿态
         result = self.check_basic(context, 1 if self.type == "FIX" else None)
         if not result:
             return {'CANCELLED'}
@@ -199,7 +207,7 @@ class MotionFixerOperator(MotionBaseOperator, bpy.types.Operator):
 class CopyRangeOperator(MotionBaseOperator, bpy.types.Operator):
     bl_idname = "mmd_motion_tools.copy_range"
     bl_label = "复制帧范围到选定项"
-    bl_description = "激活的骨骼会将帧范围传递至其他选中的骨骼"
+    bl_description = "将选中的帧范围从活动骨骼复制到所有选定骨骼"
     bl_options = {'REGISTER', 'UNDO'}
 
     def execute(self, context):

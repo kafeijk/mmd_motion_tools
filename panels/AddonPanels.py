@@ -62,7 +62,7 @@ class MotionFixer_PT_Panel(bpy.types.Panel):
         col.operator(CopyRangeOperator.bl_idname, text=CopyRangeOperator.bl_label)
         row = col.row(align=True)
         row.operator(MotionFixerOperator.bl_idname, text=MotionFixerOperator.bl_label).type = "FIX"
-        row.operator(MotionFixerOperator.bl_idname, text="边距移除").type = "REMOVE"
+        row.operator(MotionFixerOperator.bl_idname, text="移除边缘帧").type = "REMOVE"
 
 
 class CameraMotionFixer_PT_Panel(bpy.types.Panel):
