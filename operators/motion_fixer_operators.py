@@ -100,7 +100,6 @@ class MotionFixerOperator(MotionBaseOperator, bpy.types.Operator):
     )
 
     def execute(self, context):
-        # TODO 5.x适配
         # TODO 翻转姿态
         result = self.check_basic(context, 1 if self.type == "FIX" else None)
         if not result:
@@ -253,6 +252,8 @@ class CopyRangeOperator(MotionBaseOperator, bpy.types.Operator):
 
         # 取消源骨骼的选中状态，仅保留目标骨骼
         select_pose_bone(active_pb, False)
+        if len(target_bones) == 1:
+            armature.data.bones.active = armature.data.bones[target_bones[0].name]
 
 
 def apply_transform(armature, bone_name, data_path_type, offset, frame_start, frame_end, current_value, margin=0):
