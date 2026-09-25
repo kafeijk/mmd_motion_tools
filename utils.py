@@ -148,6 +148,14 @@ def is_pose_bone_selected(pb):
         return pb.select
 
 
+def set_bone_hide(bone, hide):
+    """设置骨骼隐藏状态，兼容 Blender 5.0"""
+    if bpy.app.version >= (5, 0, 0):
+        bone.hide = hide
+    else:
+        bone.bone.hide = hide
+
+
 def find_ancestor(obj):
     ancestor = obj
     while ancestor.parent is not None:

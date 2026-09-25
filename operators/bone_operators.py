@@ -66,13 +66,13 @@ def select_bake_bone(armature, mode):
         select_and_activate(armature)
         bpy.ops.object.mode_set(mode='POSE')
 
-        for bone in armature.pose.bones:
-            is_bake_bone = bone.mmd_bone.name_j in bake_bones
+        for pb in armature.pose.bones:
+            is_bake_bone = pb.mmd_bone.name_j in bake_bones
             # 保留预设骨骼，隐藏其他骨骼
-            bone.bone.hide = not is_bake_bone
+            set_bone_hide(pb, not is_bake_bone)
     else:
-        for bone in armature.pose.bones:
-            bone.bone.hide = bone.mmd_bone.is_tip
+        for pb in armature.pose.bones:
+            set_bone_hide(pb, pb.mmd_bone.is_tip)
 
     # 恢复原模式
     if original_mode != 'POSE':
