@@ -4,7 +4,7 @@ from ..utils import *
 class SimplifyBoneOperator(bpy.types.Operator):
     bl_idname = "mmd_motion_tools.simplify_bone"
     bl_label = "精简骨骼"
-    bl_description = "选择用于K帧的MMD骨骼"
+    bl_description = "选择用于K帧的骨骼"
     bl_options = {'REGISTER', 'UNDO'}
 
     bake_mode: bpy.props.EnumProperty(
@@ -20,35 +20,35 @@ class SimplifyBoneOperator(bpy.types.Operator):
     )
 
     def execute(self, context):
-        armature = self.check_props(context)
-        if not armature:
-            return {'FINISHED'}
+        armatures = self.check_props(context)
+        if not armatures:
+            return {'CANCELLED'}
 
-        select_bake_bone(armature, self.bake_mode)
+        for armature in armatures:
+            select_bake_bone(armature, self.bake_mode)
         return {'FINISHED'}
 
     def check_props(self, context):
         obj = context.active_object
 
         if not obj:
-            self.report({'ERROR'}, "请选择MMD模型!")
+            self.report({'ERROR'}, "请选择模型!")
             return None
 
-        root = find_pmx_root_with_child(obj)
-        if not root:
-            self.report({'ERROR'}, "请选择MMD模型!")
+        root = find_ancestor(obj)
+        armatures = find_children(root, "ARMATURE")
+        if not armatures:
+            self.report({'ERROR'}, "未找到模型骨架")
             return None
 
-        armature = find_pmx_armature(root)
-        if not armature:
-            self.report({'ERROR'}, "未找到骨架")
-            return None
-
-        return armature
+        return armatures
 
 
 def select_bake_bone(armature, mode):
-    """选择用于烘焙VMD的骨骼"""
+    """选择用于烘焙动作的骨骼"""
+    if mode in ["ARM1", "ARM2", "KEYFRAME", "DEFAULT"] and not is_mmd_tools_enabled():
+        return
+
     bone_modes = {
         "ARM1": PMX_BAKE_BONES_ARM1,
         "ARM2": PMX_BAKE_BONES_ARM2,

@@ -96,10 +96,8 @@ class MotionFixerOperator(MotionBaseOperator, bpy.types.Operator):
     )
 
     def execute(self, context):
-        # TODO 支持MMR或特定骨骼
         # TODO 5.x适配
         # TODO 翻转姿态
-        # TODO MMD是否开启的校验
         result = self.check_basic(context, 1 if self.type == "FIX" else None)
         if not result:
             return {'CANCELLED'}

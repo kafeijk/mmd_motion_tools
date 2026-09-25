@@ -1,9 +1,8 @@
 import addon_utils
-import bpy
 
-from ..operators.motion_fixer_operators import MotionFixerOperator, CopyRangeOperator
 from ..operators.bone_operators import SimplifyBoneOperator
-from ..utils import find_pmx_root_with_child
+from ..operators.motion_fixer_operators import MotionFixerOperator, CopyRangeOperator
+from ..utils import *
 
 
 class ToolsPanel(bpy.types.Panel):
@@ -24,19 +23,21 @@ class ToolsPanel(bpy.types.Panel):
         split = row.split(factor=0.5, align=True)
         left = split.row(align=True)
         left.operator(SimplifyBoneOperator.bl_idname, text=SimplifyBoneOperator.bl_label, icon="HIDE_OFF")
-        right = split.row(align=True)
-        right.operator("mmd_tools.morph_slider_setup", text="装配变形", icon="SHAPEKEY_DATA").type = "BIND"
-        right.operator("mmd_tools.morph_slider_setup", text="", icon="TRASH").type = "UNBIND"
 
-        root = find_pmx_root_with_child(context.active_object)
-        if root:
-            right.enabled = True
-        else:
-            right.enabled = False
+        if is_mmd_tools_enabled():
+            right = split.row(align=True)
+            right.operator("mmd_tools.morph_slider_setup", text="装配变形", icon="SHAPEKEY_DATA").type = "BIND"
+            right.operator("mmd_tools.morph_slider_setup", text="", icon="TRASH").type = "UNBIND"
 
-        row = col.row(align=True)
-        row.operator("mmd_tools.import_vmd", text="动作导入", icon='ANIM')
-        row.operator("mmd_tools.export_vmd", text="动作导出", icon='ANIM')
+            root = find_pmx_root_with_child(context.active_object)
+            if root:
+                right.enabled = True
+            else:
+                right.enabled = False
+
+            row = col.row(align=True)
+            row.operator("mmd_tools.import_vmd", text="动作导入", icon='ANIM')
+            row.operator("mmd_tools.export_vmd", text="动作导出", icon='ANIM')
 
 
 class MotionFixer_PT_Panel(bpy.types.Panel):
@@ -59,7 +60,6 @@ class MotionFixer_PT_Panel(bpy.types.Panel):
         row = col.row(align=True)
         row.operator(MotionFixerOperator.bl_idname, text=MotionFixerOperator.bl_label).type = "FIX"
         row.operator(MotionFixerOperator.bl_idname, text="边距移除").type = "REMOVE"
-
 
 
 class AboutPanel(bpy.types.Panel):

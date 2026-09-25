@@ -1,3 +1,4 @@
+import addon_utils
 import bpy
 from mathutils import Quaternion, Vector
 
@@ -145,6 +146,40 @@ def is_pose_bone_selected(pb):
         return pb.bone.select
     else:
         return pb.select
+
+
+def find_ancestor(obj):
+    ancestor = obj
+    while ancestor.parent is not None:
+        ancestor = ancestor.parent
+    return ancestor
+
+
+def find_children(obj, obj_type=None):
+    children = []
+    if not obj_type:
+        children.append(obj)
+    else:
+        if obj.type in obj_type:
+            children.append(obj)
+
+    for child in obj.children:
+        children.extend(find_children(child, obj_type))
+    return children
+
+
+def is_mmd_tools_enabled():
+    """
+    校验mmd_tools是否开启，addon.module分别为：
+    3.x版本 为 mmd_tools
+    4.2版本 临时为 bl_ext.user_default.mmd_tools
+    4.3版本及以后 bl_ext.blender_org.mmd_tools
+    """
+    for mod in addon_utils.modules():
+        if mod.__name__.split(".")[-1] == "mmd_tools":
+            return addon_utils.check(mod.__name__)[0]
+
+    return False
 
 
 def get_quaternion(armature, bone_name, frame):
