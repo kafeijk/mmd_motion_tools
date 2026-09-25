@@ -25,6 +25,8 @@ class SimplifyBoneOperator(bpy.types.Operator):
             return {'CANCELLED'}
 
         for armature in armatures:
+            if ".dummy_armature" in armature.name:
+                continue
             select_bake_bone(armature, self.bake_mode)
         return {'FINISHED'}
 
