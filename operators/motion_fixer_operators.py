@@ -74,7 +74,8 @@ class MotionBaseOperator:
         if len(frames) != end - start + 1:
             return set()
 
-        return start, end
+        return frames
+
 
 class MotionFixerOperator(MotionBaseOperator, bpy.types.Operator):
     bl_idname = "mmd_motion_tools.fix_motion"
@@ -95,7 +96,6 @@ class MotionFixerOperator(MotionBaseOperator, bpy.types.Operator):
     )
 
     def execute(self, context):
-        # TODO 如果当前帧不在帧范围内，提示报错？
         # TODO 支持MMR或特定骨骼
         # TODO 5.x适配
         # TODO 翻转姿态
@@ -131,6 +131,11 @@ class MotionFixerOperator(MotionBaseOperator, bpy.types.Operator):
 
         # 获取骨骼关键帧旋转值
         current_frame = context.scene.frame_current
+
+        if current_frame < frame_start or current_frame > frame_end:
+            self.report({'ERROR'}, '当前帧不在所选关键帧范围内!')
+            return False
+
         old_q = get_quaternion(armature, pb.name, current_frame)
         if old_q:
             # 获取骨骼当前旋转值
@@ -161,11 +166,22 @@ class MotionFixerOperator(MotionBaseOperator, bpy.types.Operator):
         for pb in bones:
             # 获取影响范围
             frames = self.get_selected_frames(action, pb.name)
-            if not frames:
-                continue
+            if frames is None:
+                self.report({'ERROR'}, '请选择关键帧!')
+                return False
+            if len(frames) == 0:
+                self.report({'ERROR'}, '请选择连续的关键帧!')
+                return False
 
             frame_start = min(frames)
             frame_end = max(frames)
+
+            # 获取骨骼关键帧旋转值
+            current_frame = bpy.context.scene.frame_current
+
+            if current_frame < frame_start or current_frame > frame_end:
+                self.report({'ERROR'}, '当前帧不在所选关键帧范围内!')
+                return False
 
             # 删除范围边缘的关键帧
             path = f'pose.bones["{pb.name}"]'
