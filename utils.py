@@ -66,6 +66,24 @@ def find_joint_parent(root):
     return next(filter(lambda o: o.type == 'EMPTY' and o.mmd_type == 'JOINT_GRP_OBJ', root.children), None)
 
 
+def is_mmd_camera_root(obj):
+    return obj is not None and obj.type == "EMPTY" and obj.mmd_type == "CAMERA"
+
+
+def find_mmd_camera_root(obj):
+    if is_mmd_camera_root(obj):
+        return obj
+
+    if obj and is_mmd_camera_root(obj.parent):
+        return obj.parent
+
+    return None
+
+
+def is_mmd_camera(obj):
+    return obj is not None and obj.type == "CAMERA" and find_mmd_camera_root(obj.parent) is not None
+
+
 def select_and_activate(obj):
     """选中并激活物体"""
     if bpy.context.active_object and bpy.context.active_object.mode != "OBJECT":

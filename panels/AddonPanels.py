@@ -44,7 +44,7 @@ class ToolsPanel(bpy.types.Panel):
 
 
 class MotionFixer_PT_Panel(bpy.types.Panel):
-    bl_label = "动作修复"
+    bl_label = "模型动作修复"
     bl_idname = "MOTIONTOOLS_PT_motion_fixer"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
@@ -65,13 +65,54 @@ class MotionFixer_PT_Panel(bpy.types.Panel):
         row.operator(MotionFixerOperator.bl_idname, text="边距移除").type = "REMOVE"
 
 
+class CameraMotionFixer_PT_Panel(bpy.types.Panel):
+    bl_label = "相机运动修复"
+    bl_idname = "MOTIONTOOLS_PT_camera_motion_fixer"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_category = 'MotionTools'
+    bl_order = 2
+
+    def draw(self, context):
+        obj = context.active_object
+
+        layout = self.layout
+        layout.use_property_split = True
+
+        if is_mmd_tools_enabled():
+            mmd_camera_root = find_mmd_camera_root(obj)
+            if mmd_camera_root:
+                try:
+                    from mmd_tools.core.camera import MMDCamera
+                except ImportError:
+                    try:
+                        from bl_ext.blender_org.mmd_tools.core.camera import MMDCamera
+                    except ImportError:
+                        pass
+
+                mmd_cam = MMDCamera(obj)
+                empty = mmd_cam.object()
+                camera = mmd_cam.camera()
+
+
+                layout.prop(empty, "location")
+                layout.prop(camera, "location", index=1, text="Distance")
+
+                layout.prop(empty, "rotation_euler")
+
+                layout.prop(empty.mmd_camera, "angle")
+                layout.prop(empty.mmd_camera, "is_perspective")
+            else:
+                layout.operator("mmd_tools.convert_to_mmd_camera", text="Convert")
+
+
 class AboutPanel(bpy.types.Panel):
     bl_idname = "MOTIONTOOLS_PT_about"
     bl_label = "About"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'  # N面板
     bl_category = 'MotionTools'  # 追加到其它面板或独自一个面板
-    bl_order = 2
+    bl_order = 3
     bl_options = {'DEFAULT_CLOSED'}
 
     def draw(self, context):
