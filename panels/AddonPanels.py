@@ -19,28 +19,31 @@ class ToolsPanel(bpy.types.Panel):
 
         row = col.row(align=True)
         split = row.split(factor=0.5, align=True)
-        left = split.row(align=True)
-        left.operator(SimplifyBoneOperator.bl_idname, text=SimplifyBoneOperator.bl_label, icon="GROUP_BONE")
-
         if is_mmd_tools_enabled():
-            right = split.row(align=True)
-            right.operator("mmd_tools.morph_slider_setup", text="装配变形", icon="SHAPEKEY_DATA").type = "BIND"
-            right.operator("mmd_tools.morph_slider_setup", text="", icon="TRASH").type = "UNBIND"
+            left = split.row(align=True)
+            left.operator("mmd_tools.import_model", text="模型导入", icon="OUTLINER_OB_ARMATURE")
+
+            right_setup = split.row(align=True)
+            right_setup.operator("mmd_tools.morph_slider_setup", text="装配变形", icon="SHAPEKEY_DATA").type = "BIND"
+            right_setup.operator("mmd_tools.morph_slider_setup", text="", icon="TRASH").type = "UNBIND"
 
             root = find_pmx_root_with_child(context.active_object)
             if root:
-                right.enabled = True
+                right_setup.enabled = True
             else:
-                right.enabled = False
+                right_setup.enabled = False
 
+        row = col.row(align=True)
+        split = row.split(factor=0.5, align=True)
+        left = split.row(align=True)
+        left.operator(SimplifyBoneOperator.bl_idname, text=SimplifyBoneOperator.bl_label, icon="GROUP_BONE")
+        right = split.row(align=True)
+        right.operator(FlipPoseOperator.bl_idname, text=FlipPoseOperator.bl_label, icon="ARROW_LEFTRIGHT")
+
+        if is_mmd_tools_enabled():
             row = col.row(align=True)
             row.operator("mmd_tools.import_vmd", text="动作导入", icon='ANIM')
             row.operator("mmd_tools.export_vmd", text="动作导出", icon='ANIM')
-
-            row = col.row(align=True)
-            split = row.split(factor=0.5, align=True)
-            left = split.row(align=True)
-            left.operator(FlipPoseOperator.bl_idname, text=FlipPoseOperator.bl_label, icon="ARROW_LEFTRIGHT")
 
 
 class MotionFixer_PT_Panel(bpy.types.Panel):
@@ -93,7 +96,6 @@ class CameraMotionFixer_PT_Panel(bpy.types.Panel):
                 mmd_cam = MMDCamera(obj)
                 empty = mmd_cam.object()
                 camera = mmd_cam.camera()
-
 
                 layout.prop(empty, "location")
                 layout.prop(camera, "location", index=1, text="Distance")
