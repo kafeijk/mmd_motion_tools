@@ -21,12 +21,12 @@ class MotionBaseOperator:
 
         animation_data = armature.animation_data
         if not animation_data:
-            self.report({'ERROR'}, '未检测到选中的关键帧!')
+            self.report({'ERROR'}, '未检测到关键帧!')
             return None
 
         action = animation_data.action
         if not action:
-            self.report({'ERROR'}, '未检测到选中的关键帧!')
+            self.report({'ERROR'}, '未检测到关键帧!')
             return None
 
         return armature, bones
@@ -83,9 +83,7 @@ class MotionFixerOperator(MotionBaseOperator, bpy.types.Operator):
     )
 
     def execute(self, context):
-        # TODO 不能把 第零帧也删咯
         # TODO 如果当前帧不在帧范围内，提示报错？
-        # TODO 删除两侧后改为 平缓过渡
         # TODO 支持MMR或特定骨骼
         # TODO 5.x适配
         # TODO 翻转姿态
@@ -277,15 +275,58 @@ def remove_margin_keys(fcurves, frame_start, frame_end, margin):
     for fc in fcurves:
         fc.update()
 
+    # 当前曲线最小关键帧
+    min_frame = int(min(kp.co[0] for kp in fc.keyframe_points))
+
     for fc in fcurves:
         for i in range(len(fc.keyframe_points) - 1, -1, -1):
             kp = fc.keyframe_points[i]
             frame = int(kp.co[0])
+            if frame == min_frame:
+                continue
             if frame_start - margin <= frame < frame_start or frame_end < frame <= frame_end + margin:
                 fc.keyframe_points.remove(kp)
 
     for fc in fcurves:
         fc.update()
 
+    # 差值方式改为平滑
+    for fc in fcurves:
+        smooth_key_transition(
+            fc,
+            [
+                (frame_start - margin, frame_start),
+                (frame_end, frame_end + margin),
+            ]
+        )
+
     # 刷新场景以更新视图
     bpy.context.scene.frame_current = bpy.context.scene.frame_current
+
+
+def find_adjacent_keys(fc, left_frame, right_frame):
+    """查找指定范围两侧相邻关键帧"""
+    left_key = None
+    right_key = None
+
+    for kp in fc.keyframe_points:
+        frame = int(kp.co[0])
+
+        if frame <= left_frame:
+            left_key = kp
+
+        if frame >= right_frame:
+            right_key = kp
+            break
+
+    return left_key, right_key
+
+
+def smooth_key_transition(fc, frame_pairs):
+    """设置指定关键帧之间为线性过渡"""
+    for left_frame, right_frame in frame_pairs:
+        left_key, _ = find_adjacent_keys(fc, left_frame, right_frame)
+        if left_key:
+            left_key.interpolation = 'LINEAR'
+
+    fc.update()
