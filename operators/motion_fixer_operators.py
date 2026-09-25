@@ -48,7 +48,7 @@ class MotionBaseOperator:
         return [pb for pb in armature.pose.bones if is_pose_bone_selected(pb)]
 
     def get_selected_frames(self, action, bone_name):
-        """获取指定骨骼选中的关键帧"""
+        """获取指定骨骼选中的关键帧范围"""
 
         frames = set()
         path = f'pose.bones["{bone_name}"]'
@@ -61,8 +61,20 @@ class MotionBaseOperator:
                 if kp.select_control_point or kp.select_left_handle or kp.select_right_handle:
                     frames.add(int(kp.co[0]))
 
-        return frames
+        # 无数据
+        if not frames:
+            return None
 
+        frames = sorted(frames)
+
+        start = frames[0]
+        end = frames[-1]
+
+        # 多个范围
+        if len(frames) != end - start + 1:
+            return set()
+
+        return start, end
 
 class MotionFixerOperator(MotionBaseOperator, bpy.types.Operator):
     bl_idname = "mmd_motion_tools.fix_motion"
@@ -108,8 +120,11 @@ class MotionFixerOperator(MotionBaseOperator, bpy.types.Operator):
 
         # 获取影响范围
         frames = self.get_selected_frames(action, pb.name)
-        if not frames:
+        if frames is None:
             self.report({'ERROR'}, '请选择关键帧!')
+            return False
+        if len(frames) == 0:
+            self.report({'ERROR'}, '请选择连续的关键帧!')
             return False
         frame_start = min(frames)
         frame_end = max(frames)
@@ -197,9 +212,12 @@ class CopyRangeOperator(MotionBaseOperator, bpy.types.Operator):
         # 获取影响范围
         action = armature.animation_data.action
         frames = self.get_selected_frames(action, active_pb.name)
-        if not frames:
-            self.report({'ERROR'}, '未检测到选中的关键帧!')
-            return
+        if frames is None:
+            self.report({'ERROR'}, '请选择关键帧!')
+            return False
+        if len(frames) == 0:
+            self.report({'ERROR'}, '请选择连续的关键帧!')
+            return False
 
         # 设置目标骨骼的关键帧选择状态
         for target_pb in target_bones:
