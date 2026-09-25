@@ -1,5 +1,5 @@
 from ..operators.bone_operators import SimplifyBoneOperator, FlipPoseOperator
-from ..operators.motion_fixer_operators import MotionFixerOperator, CopyRangeOperator
+from ..operators.motion_fixer_operators import MotionFixerOperator, CopyRangeOperator, RemoveMarginKeyFrameOperator
 from ..utils import *
 
 
@@ -61,8 +61,8 @@ class MotionFixer_PT_Panel(bpy.types.Panel):
 
         col.operator(CopyRangeOperator.bl_idname, text=CopyRangeOperator.bl_label)
         row = col.row(align=True)
-        row.operator(MotionFixerOperator.bl_idname, text=MotionFixerOperator.bl_label).type = "FIX"
-        row.operator(MotionFixerOperator.bl_idname, text="移除边缘帧").type = "REMOVE"
+        row.operator(MotionFixerOperator.bl_idname, text=MotionFixerOperator.bl_label)
+        row.operator(RemoveMarginKeyFrameOperator.bl_idname, text=RemoveMarginKeyFrameOperator.bl_label)
 
 
 class CameraMotionFixer_PT_Panel(bpy.types.Panel):

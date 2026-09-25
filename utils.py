@@ -283,3 +283,37 @@ def get_location(armature, bone_name, frame, default=None):
 
 def calculate_quaternion_offset(q_start, q_target):
     return q_target @ q_start.inverted()
+
+
+def get_selected_frames(action, bone_name):
+    """获取指定骨骼选中的关键帧范围"""
+
+    selected_frames = set()
+    all_frames = set()
+    path = f'pose.bones["{bone_name}"]'
+
+    for fc in action.fcurves:
+        if not fc.data_path.startswith(path):
+            continue
+
+        for kp in fc.keyframe_points:
+            frame = int(kp.co[0])
+            all_frames.add(frame)
+
+            if kp.select_control_point or kp.select_left_handle or kp.select_right_handle:
+                selected_frames.add(frame)
+
+    # 无选中关键帧
+    if not selected_frames:
+        return None
+
+    start = min(selected_frames)
+    end = max(selected_frames)
+
+    # 检查范围内是否存在未选中的关键帧
+    unselected = all_frames - selected_frames
+    for frame in unselected:
+        if start < frame < end:
+            return set()
+
+    return sorted(selected_frames)

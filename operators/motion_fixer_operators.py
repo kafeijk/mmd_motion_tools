@@ -44,77 +44,32 @@ class MotionBaseOperator:
 
         return obj
 
-    def get_selected_frames(self, action, bone_name):
-        """获取指定骨骼选中的关键帧范围"""
-
-        selected_frames = set()
-        all_frames = set()
-        path = f'pose.bones["{bone_name}"]'
-
-        for fc in action.fcurves:
-            if not fc.data_path.startswith(path):
-                continue
-
-            for kp in fc.keyframe_points:
-                frame = int(kp.co[0])
-                all_frames.add(frame)
-
-                if kp.select_control_point or kp.select_left_handle or kp.select_right_handle:
-                    selected_frames.add(frame)
-
-        # 无选中关键帧
-        if not selected_frames:
-            return None
-
-        start = min(selected_frames)
-        end = max(selected_frames)
-
-        # 检查范围内是否存在未选中的关键帧
-        unselected = all_frames - selected_frames
-        for frame in unselected:
-            if start < frame < end:
-                return set()
-
-        return sorted(selected_frames)
-
 
 class MotionFixerOperator(MotionBaseOperator, bpy.types.Operator):
     bl_idname = "mmd_motion_tools.fix_motion"
     bl_label = "应用修改"
+    bl_description = "计算活动骨骼当前姿态与关键帧姿态的差值，并将该变化应用到选中的关键帧上"
     bl_options = {'REGISTER', 'UNDO'}
 
     margin: bpy.props.IntProperty(
         name="边距",
-        description="边距",
+        description="边缘关键帧范围",
         default=3,
         min=0,
     )
 
-    type: bpy.props.StringProperty(
-        default="FIX",
-        options={'HIDDEN'},
-    )
-
-    @classmethod
-    def description(cls, context, properties):
-        if properties.type == "FIX":
-            return "计算活动骨骼当前姿态与关键帧姿态的差值，并将该变化应用到选中的关键帧上"
-
-        if properties.type == "REMOVE":
-            return "删除选中关键帧前后指定边距范围内的关键帧"
-
-        return "应用修改"
+    def invoke(self, context, event):
+        self.margin = context.scene.mmd_motion_tools_fix_motion.margin
+        return self.execute(context)
 
     def execute(self, context):
-        result = self.check_basic(context, 1 if self.type == "FIX" else None)
+        context.scene.mmd_motion_tools_fix_motion.margin = self.margin
+        result = self.check_basic(context, 1)
         if not result:
             return {'CANCELLED'}
-        if self.type == "REMOVE":
-            if not self.remove_margin_keys(result):
-                return {'CANCELLED'}
-        else:
-            if not self.fix_motion(context, result):
-                return {'CANCELLED'}
+
+        if not self.fix_motion(context, result):
+            return {'CANCELLED'}
 
         return {'FINISHED'}
 
@@ -125,7 +80,7 @@ class MotionFixerOperator(MotionBaseOperator, bpy.types.Operator):
         action = armature.animation_data.action
 
         # 获取影响范围
-        frames = self.get_selected_frames(action, pb.name)
+        frames = get_selected_frames(action, pb.name)
         if frames is None:
             self.report({'ERROR'}, '请选择关键帧!')
             return False
@@ -164,6 +119,35 @@ class MotionFixerOperator(MotionBaseOperator, bpy.types.Operator):
 
         return True
 
+
+class RemoveMarginKeyFrameOperator(MotionBaseOperator, bpy.types.Operator):
+    bl_idname = "mmd_motion_tools.remove_margin_keyframe"
+    bl_label = "删除边缘帧"
+    bl_description = "删除选中关键帧前后指定边距范围内的关键帧"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    margin: bpy.props.IntProperty(
+        name="边距",
+        description="边缘关键帧范围",
+        default=3,
+        min=0,
+    )
+
+    def invoke(self, context, event):
+        self.margin = context.scene.mmd_motion_tools_fix_motion.margin
+        return self.execute(context)
+
+    def execute(self, context):
+        context.scene.mmd_motion_tools_fix_motion.margin = self.margin
+        result = self.check_basic(context)
+        if not result:
+            return {'CANCELLED'}
+
+        if not self.remove_margin_keys(result):
+            return {'CANCELLED'}
+
+        return {'FINISHED'}
+
     def remove_margin_keys(self, result):
         # 获取骨骼信息
         armature, bones = result
@@ -171,7 +155,7 @@ class MotionFixerOperator(MotionBaseOperator, bpy.types.Operator):
 
         for pb in bones:
             # 获取影响范围
-            frames = self.get_selected_frames(action, pb.name)
+            frames = get_selected_frames(action, pb.name)
             if frames is None:
                 self.report({'ERROR'}, '请选择关键帧!')
                 return False
@@ -233,7 +217,7 @@ class CopyRangeOperator(MotionBaseOperator, bpy.types.Operator):
 
         # 获取影响范围
         action = armature.animation_data.action
-        frames = self.get_selected_frames(action, active_pb.name)
+        frames = get_selected_frames(action, active_pb.name)
         if frames is None:
             self.report({'ERROR'}, '请选择关键帧!')
             return False
