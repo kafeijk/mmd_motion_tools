@@ -1,7 +1,7 @@
 from ..utils import *
 
 
-class CameraMotionFixerOperator( bpy.types.Operator):
+class CameraMotionFixerOperator(bpy.types.Operator):
     bl_idname = "mmd_motion_tools.fix_camera_motion"
     bl_label = "应用相机修改"
     bl_description = "计算MMD相机当前状态与关键帧状态的差值，并将该变化应用到选中的关键帧上"
@@ -119,17 +119,18 @@ class CameraMotionFixerOperator( bpy.types.Operator):
             # 获取旋转值偏移量
             offset = calculate_euler_offset(old_e, current_e)
             # 应用旋转变化
-            apply_transform(mmd_camera, "rotation_euler", offset, frame_start, frame_end, current_e, margin = self.margin)
+            apply_transform(mmd_camera, "rotation_euler", offset, frame_start, frame_end, current_e, margin=self.margin)
 
         # 针对 mmd_camera 角度的修改
         old_angle = get_camera_value(mmd_camera, "mmd_camera.angle", current_frame)
-        if old_angle is not None:   # 角度可能为0
+        if old_angle is not None:  # 角度可能为0
             # 获取 mmd_camera 当前旋转值
             current_angle = mmd_camera.mmd_camera.angle
             # 获取旋转值偏移量
             offset = current_angle - old_angle
             # 应用旋转变化
-            apply_transform(mmd_camera, "mmd_camera.angle", offset, frame_start, frame_end, current_angle,margin = self.margin)
+            apply_transform(mmd_camera, "mmd_camera.angle", offset, frame_start, frame_end, current_angle,
+                            margin=self.margin)
 
         # 针对 mmd_camera 位置的修改
         old_loc = get_location(mmd_camera, "location", current_frame)
@@ -139,7 +140,7 @@ class CameraMotionFixerOperator( bpy.types.Operator):
             # 获取位置偏移量
             offset = current_loc - old_loc
             # 应用位置变化
-            apply_transform(mmd_camera, f'location', offset, frame_start, frame_end, current_loc, margin = self.margin)
+            apply_transform(mmd_camera, f'location', offset, frame_start, frame_end, current_loc, margin=self.margin)
 
         # 针对 camera 距离的修改
         old_dis = get_camera_value(camera, "location", current_frame, 1)
@@ -256,9 +257,9 @@ class FindCameraSegmentOperator(bpy.types.Operator):
         end = last
         for boundaries in boundaries_list:
             for left, right in boundaries:
-                if left < frame_current:
+                if left <= frame_current:
                     start = max(start, left)
-                if frame_current < right:
+                if frame_current <= right:
                     end = min(end, right)
 
         # 设置目标相机的关键帧选择状态
