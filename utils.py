@@ -1,3 +1,6 @@
+import functools
+import time
+
 import addon_utils
 import bpy
 from mathutils import Quaternion, Vector
@@ -317,3 +320,19 @@ def get_selected_frames(action, bone_name):
             return set()
 
     return sorted(selected_frames)
+
+
+def timeit(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        start = time.perf_counter()
+
+        result = func(*args, **kwargs)
+
+        end = time.perf_counter()
+
+        print(f"{func.__name__} 执行耗时: {end - start:.6f} 秒")
+
+        return result
+
+    return wrapper
