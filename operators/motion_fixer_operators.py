@@ -80,7 +80,7 @@ class MotionFixerOperator(MotionBaseOperator, bpy.types.Operator):
         action = armature.animation_data.action
 
         # 获取影响范围
-        frames = get_selected_frames(action, pb.name)
+        frames = get_selected_frames(action, f'pose.bones["{pb.name}"]')
         if frames is None:
             self.report({'ERROR'}, '请选择关键帧!')
             return False
@@ -104,18 +104,18 @@ class MotionFixerOperator(MotionBaseOperator, bpy.types.Operator):
             # 获取旋转值偏移量
             offset = calculate_quaternion_offset(old_q, current_q)
             # 应用旋转变化
-            apply_transform(armature, pb.name, "rotation_quaternion", offset, frame_start, frame_end, current_q,
-                            self.margin)
+            apply_transform(armature, f'pose.bones["{pb.name}"].rotation_quaternion', offset, frame_start, frame_end,
+                            current_q, margin = self.margin)
 
         # 获取骨骼关键帧位置
-        old_loc = get_location(armature, pb.name, current_frame)
+        old_loc = get_location(armature, f'pose.bones["{pb.name}"].location', current_frame)
         if old_loc:
             # 获取当前骨骼位置
             current_loc = pb.location.copy()
             # 获取位置偏移量
             offset = current_loc - old_loc
             # 应用位置变化
-            apply_transform(armature, pb.name, "location", offset, frame_start, frame_end, current_loc, self.margin)
+            apply_transform(armature, f'pose.bones["{pb.name}"].location', offset, frame_start, frame_end, current_loc, margin=self.margin)
 
         return True
 
@@ -155,7 +155,7 @@ class RemoveMarginKeyFrameOperator(MotionBaseOperator, bpy.types.Operator):
 
         for pb in bones:
             # 获取影响范围
-            frames = get_selected_frames(action, pb.name)
+            frames = get_selected_frames(action, f'pose.bones["{pb.name}"]')
             if frames is None:
                 self.report({'ERROR'}, '请选择关键帧!')
                 return False
@@ -217,7 +217,7 @@ class CopyRangeOperator(MotionBaseOperator, bpy.types.Operator):
 
         # 获取影响范围
         action = armature.animation_data.action
-        frames = get_selected_frames(action, active_pb.name)
+        frames = get_selected_frames(action, f'pose.bones["{active_pb.name}"]')
         if frames is None:
             self.report({'ERROR'}, '请选择关键帧!')
             return False
@@ -243,116 +243,3 @@ class CopyRangeOperator(MotionBaseOperator, bpy.types.Operator):
         select_pose_bone(active_pb, False)
         if len(target_bones) == 1:
             armature.data.bones.active = armature.data.bones[target_bones[0].name]
-
-
-def apply_transform(armature, bone_name, data_path_type, offset, frame_start, frame_end, current_value, margin=0):
-    """应用骨骼的变换修改"""
-    action = armature.animation_data.action
-    if not action:
-        return
-
-    path = f'pose.bones["{bone_name}"].{data_path_type}'
-    fcurve_map = {fc.array_index: fc for fc in action.fcurves if fc.data_path == path}
-    if not fcurve_map:
-        return
-
-    # 获取通道数（维度）
-    channels = len(current_value)
-    frame_keys = {}
-
-    for index, fc in fcurve_map.items():
-        for kp in fc.keyframe_points:
-            frame = int(kp.co[0])
-            if frame_start <= frame <= frame_end:
-                if frame not in frame_keys:
-                    frame_keys[frame] = [None] * channels
-                frame_keys[frame][index] = kp
-
-    for kps in frame_keys.values():
-        # 若缺失通道，则使用当前骨骼值
-        values = list(current_value)
-        for index, kp in enumerate(kps):
-            if kp:
-                values[index] = kp.co[1]
-
-        if data_path_type == "rotation_quaternion":
-            value = Quaternion(values)
-            value = offset @ value
-            value.normalize()
-        elif data_path_type == "location":
-            value = Vector(values) + offset
-        else:
-            continue
-
-        # 只修改含关键帧的通道
-        for index, kp in enumerate(kps):
-            if kp:
-                kp.co[1] = value[index]
-
-    for fc in fcurve_map.values():
-        fc.update()
-
-    if margin > 0:
-        remove_margin_keys(fcurve_map.values(), frame_start, frame_end, margin)
-
-
-def remove_margin_keys(fcurves, frame_start, frame_end, margin):
-    """删除范围边缘的关键帧"""
-    for fc in fcurves:
-        fc.update()
-
-    # 当前曲线最小关键帧
-    min_frame = int(min(kp.co[0] for kp in fc.keyframe_points))
-
-    for fc in fcurves:
-        for i in range(len(fc.keyframe_points) - 1, -1, -1):
-            kp = fc.keyframe_points[i]
-            frame = int(kp.co[0])
-            if frame == min_frame:
-                continue
-            if frame_start - margin <= frame < frame_start or frame_end < frame <= frame_end + margin:
-                fc.keyframe_points.remove(kp)
-
-    for fc in fcurves:
-        fc.update()
-
-    # 差值方式改为平滑
-    for fc in fcurves:
-        smooth_key_transition(
-            fc,
-            [
-                (frame_start - margin, frame_start),
-                (frame_end, frame_end + margin),
-            ]
-        )
-
-    # 刷新场景以更新视图
-    bpy.context.scene.frame_current = bpy.context.scene.frame_current
-
-
-def find_adjacent_keys(fc, left_frame, right_frame):
-    """查找指定范围两侧相邻关键帧"""
-    left_key = None
-    right_key = None
-
-    for kp in fc.keyframe_points:
-        frame = int(kp.co[0])
-
-        if frame <= left_frame:
-            left_key = kp
-
-        if frame >= right_frame:
-            right_key = kp
-            break
-
-    return left_key, right_key
-
-
-def smooth_key_transition(fc, frame_pairs):
-    """设置指定关键帧之间为线性过渡"""
-    for left_frame, right_frame in frame_pairs:
-        left_key, _ = find_adjacent_keys(fc, left_frame, right_frame)
-        if left_key:
-            left_key.interpolation = 'LINEAR'
-
-    fc.update()

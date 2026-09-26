@@ -1,5 +1,5 @@
 from ..operators.bone_operators import SimplifyBoneOperator, FlipPoseOperator
-from ..operators.camera_motion_fixer_operators import FindCameraSegmentOperator
+from ..operators.camera_motion_fixer_operators import FindCameraSegmentOperator, CameraMotionFixerOperator
 from ..operators.motion_fixer_operators import MotionFixerOperator, CopyRangeOperator, RemoveMarginKeyFrameOperator
 from ..utils import *
 
@@ -105,7 +105,10 @@ class CameraMotionFixer_PT_Panel(bpy.types.Panel):
 
                 layout.prop(empty.mmd_camera, "angle")
                 layout.prop(empty.mmd_camera, "is_perspective")
-                layout.operator(FindCameraSegmentOperator.bl_idname, text=FindCameraSegmentOperator.bl_label)
+
+                col = layout.column()
+                col.operator(FindCameraSegmentOperator.bl_idname, text=FindCameraSegmentOperator.bl_label)
+                col.operator(CameraMotionFixerOperator.bl_idname, text=CameraMotionFixerOperator.bl_label)
 
             else:
                 layout.operator("mmd_tools.convert_to_mmd_camera", text="Convert")
