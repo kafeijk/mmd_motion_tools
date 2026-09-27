@@ -49,7 +49,8 @@ class ToolsPanel(bpy.types.Panel):
 
             row = col.row(align=True)
             row.operator(ImportVmdPhysicsOperator.bl_idname, text=ImportVmdPhysicsOperator.bl_label, icon='ADD')
-            row.operator(RemovePhysicalBoneAnimationOperator.bl_idname, text=RemovePhysicalBoneAnimationOperator.bl_label, icon='REMOVE')
+            row.operator(RemovePhysicalBoneAnimationOperator.bl_idname,
+                         text=RemovePhysicalBoneAnimationOperator.bl_label, icon='REMOVE')
 
 
 class MotionFixer_PT_Panel(bpy.types.Panel):

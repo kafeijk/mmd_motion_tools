@@ -105,7 +105,7 @@ class MotionFixerOperator(MotionBaseOperator, bpy.types.Operator):
             offset = calculate_quaternion_offset(old_q, current_q)
             # 应用旋转变化
             apply_transform(armature, f'pose.bones["{pb.name}"].rotation_quaternion', offset, frame_start, frame_end,
-                            current_q, margin = self.margin)
+                            current_q, margin=self.margin)
 
         # 获取骨骼关键帧位置
         old_loc = get_location(armature, f'pose.bones["{pb.name}"].location', current_frame)
@@ -115,7 +115,8 @@ class MotionFixerOperator(MotionBaseOperator, bpy.types.Operator):
             # 获取位置偏移量
             offset = current_loc - old_loc
             # 应用位置变化
-            apply_transform(armature, f'pose.bones["{pb.name}"].location', offset, frame_start, frame_end, current_loc, margin=self.margin)
+            apply_transform(armature, f'pose.bones["{pb.name}"].location', offset, frame_start, frame_end, current_loc,
+                            margin=self.margin)
 
         return True
 

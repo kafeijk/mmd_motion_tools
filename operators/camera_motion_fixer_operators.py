@@ -277,7 +277,6 @@ class FindCameraSegmentOperator(bpy.types.Operator):
         return True
 
 
-@timeit
 def find_boundaries(fcurve):
     """寻找关键帧区域的左右边界"""
 
@@ -333,7 +332,6 @@ class FakeKeyframePoint:
         self.handle_right = kp.handle_right.copy()
 
 
-@timeit
 def copy_fcurves(fcurves):
     """深拷贝FCurve，仅用于分析，不影响原动画数据"""
 
@@ -343,7 +341,6 @@ def copy_fcurves(fcurves):
     ]
 
 
-@timeit
 def clean_fcurves(fcurves, threshold=0.03):
     for fcurve in fcurves:
         points = fcurve.keyframe_points

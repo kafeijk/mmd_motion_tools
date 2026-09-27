@@ -94,7 +94,6 @@ class ImportVmdPhysicsOperator(bpy.types.Operator, ImportHelper):
 
         # 拷贝物理数据
         physical_bones = get_physical_bone(root)
-        print(physical_bones)
         copy_bone_animation(copied_armature, armature, physical_bones)
         # 通过物理骨骼的 IK 约束查找对应的 IK，并清除 IK 动画、关闭 IK
         set_physical_bone_ik(armature, physical_bones)
@@ -208,7 +207,6 @@ def get_vmd_bones(filepath):
     return list(vmd_file.boneAnimation.keys())
 
 
-@timeit
 def copy_bone_animation(src_armature, dst_armature, bone_names):
     """将指定骨骼的动画从源 Action 完整覆盖到目标 Action。"""
 
