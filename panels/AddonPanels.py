@@ -10,7 +10,7 @@ class ToolsPanel(bpy.types.Panel):
     bl_idname = "MOTIONTOOLS_PT_tools"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = 'MotionTools'
+    bl_category = 'MMD Anim'
     bl_order = 0
 
     def draw(self, context):
@@ -57,7 +57,7 @@ class MotionFixer_PT_Panel(bpy.types.Panel):
     bl_idname = "MOTIONTOOLS_PT_motion_fixer"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = 'MotionTools'
+    bl_category = 'MMD Anim'
     bl_order = 1
 
     def draw(self, context):
@@ -79,7 +79,7 @@ class CameraMotionFixer_PT_Panel(bpy.types.Panel):
     bl_idname = "MOTIONTOOLS_PT_camera_motion_fixer"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = 'MotionTools'
+    bl_category = 'MMD Anim'
     bl_order = 2
 
     def draw(self, context):
@@ -124,7 +124,7 @@ class AboutPanel(bpy.types.Panel):
     bl_label = "About"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'  # N面板
-    bl_category = 'MotionTools'  # 追加到其它面板或独自一个面板
+    bl_category = 'MMD Anim'  # 追加到其它面板或独自一个面板
     bl_order = 3
     bl_options = {'DEFAULT_CLOSED'}
 

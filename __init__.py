@@ -9,11 +9,11 @@ from ...common.i18n.i18n import load_dictionary
 
 # Add-on info
 bl_info = {
-    "name": "mmd_motion_tools",
+    "name": "MMD Motion Tools",
     "author": "来杯咖啡再说",
     "blender":(3, 0, 0),
     "version": (0, 0, 1),
-    "description": "Addon for editing model motions",
+    "description": "Addon for editing animation",
     "category": "3D View"
 }
 
