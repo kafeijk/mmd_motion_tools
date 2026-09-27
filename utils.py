@@ -1,4 +1,5 @@
 import functools
+import re
 import time
 
 import addon_utils
@@ -31,6 +32,9 @@ PMX_BAKE_BONES_ARM2 = [
     '左肩', '左腕', '左腕捩', '左ひじ', '左手捩', '左手首',
     '右肩', '右腕', '右腕捩', '右ひじ', '右手捩', '右手首',
 ]
+
+CONVERT_NAME_TO_L_REGEXP = re.compile('^(.*)左(.*)$')
+CONVERT_NAME_TO_R_REGEXP = re.compile('^(.*)右(.*)$')
 
 
 def find_pmx_root():
@@ -431,7 +435,7 @@ def apply_transform(obj, data_path, offset, frame_start, frame_end, current_valu
     channels = len(current_value)
     frame_keys = {}
 
-    for (data_path,index), fc in fcurve_map.items():
+    for (data_path, index), fc in fcurve_map.items():
         for kp in fc.keyframe_points:
             frame = int(kp.co[0])
             if frame_start <= frame <= frame_end:
@@ -545,3 +549,44 @@ def find_adjacent_keys(fc, left_frame, right_frame):
             break
 
     return left_key, right_key
+
+
+def get_physical_bone(root):
+    """获取受物理影响的骨骼"""
+    rigidbody_parent = find_rigid_body_parent(root)
+    if rigidbody_parent is None:
+        return []
+    rigid_bodies = rigidbody_parent.children
+    # 受刚体物理影响的骨骼名称列表（blender名称）
+    bl_names = []
+    for rigidbody in rigid_bodies:
+        # 存在有刚体但没有关联骨骼的情况
+        if rigidbody.mmd_rigid.bone == '':
+            continue
+        # 0:骨骼 1:物理 2:物理+骨骼
+        if rigidbody.mmd_rigid.type not in ('1', '2'):
+            continue
+        bl_names.append(rigidbody.mmd_rigid.bone)
+    return bl_names
+
+
+## 日本語で左右を命名されている名前をblender方式のL(R)に変更する
+def convertNameToLR(name, use_underscore=False):
+    m = CONVERT_NAME_TO_L_REGEXP.match(name)
+    delimiter = '_' if use_underscore else '.'
+    if m:
+        name = m.group(1) + m.group(2) + delimiter + 'L'
+    m = CONVERT_NAME_TO_R_REGEXP.match(name)
+    if m:
+        name = m.group(1) + m.group(2) + delimiter + 'R'
+    return name
+
+
+def copy_obj(obj, col=None):
+    new_mesh = obj.data.copy()
+    new_obj = obj.copy()
+    new_obj.data = new_mesh
+    if not col:
+        col = obj.users_collection[0]
+    col.objects.link(new_obj)
+    return new_obj

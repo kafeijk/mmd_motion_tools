@@ -1,6 +1,7 @@
 from ..operators.bone_operators import SimplifyBoneOperator, FlipPoseOperator
 from ..operators.camera_motion_fixer_operators import FindCameraSegmentOperator, CameraMotionFixerOperator
 from ..operators.motion_fixer_operators import MotionFixerOperator, CopyRangeOperator, RemoveMarginKeyFrameOperator
+from ..operators.utility_operators import ImportVmdPhysicsOperator, RemovePhysicalBoneAnimationOperator
 from ..utils import *
 
 
@@ -45,6 +46,10 @@ class ToolsPanel(bpy.types.Panel):
             row = col.row(align=True)
             row.operator("mmd_tools.import_vmd", text="动作导入", icon='ANIM')
             row.operator("mmd_tools.export_vmd", text="动作导出", icon='ANIM')
+
+            row = col.row(align=True)
+            row.operator(ImportVmdPhysicsOperator.bl_idname, text=ImportVmdPhysicsOperator.bl_label, icon='ADD')
+            row.operator(RemovePhysicalBoneAnimationOperator.bl_idname, text=RemovePhysicalBoneAnimationOperator.bl_label, icon='REMOVE')
 
 
 class MotionFixer_PT_Panel(bpy.types.Panel):
