@@ -213,7 +213,7 @@ class RemoveOuterKeyframesOperator(MotionBaseOperator, bpy.types.Operator):
 
 class CopyRangeOperator(MotionBaseOperator, bpy.types.Operator):
     bl_idname = "mmd_motion_tools.copy_range"
-    bl_label = "复制帧范围到选定项"
+    bl_label = "复制范围选择"
     bl_description = "将选中的帧范围从活动骨骼复制到所有选定骨骼"
     bl_options = {'REGISTER', 'UNDO'}
 
@@ -358,3 +358,32 @@ def remove_inner_keys(fcurves, frame_start, frame_end):
 
     # 刷新场景以更新视图
     bpy.context.scene.frame_current = bpy.context.scene.frame_current
+
+
+class DeselectKeyframesOperator(MotionBaseOperator, bpy.types.Operator):
+    bl_idname = "mmd_motion_tools.deselect_keyframes"
+    bl_label = "取消范围选择"
+    bl_description = "取消所有骨骼的关键帧的选中状态"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        result = self.check_basic(context)
+        if not result:
+            return {'CANCELLED'}
+
+        armature, bones = result
+        action = armature.animation_data.action
+
+        for pb in armature.pose.bones:
+            path = f'pose.bones["{pb.name}"]'
+
+            for fc in action.fcurves:
+                if not fc.data_path.startswith(path):
+                    continue
+
+                for kp in fc.keyframe_points:
+                    kp.select_control_point = False
+                    kp.select_left_handle = False
+                    kp.select_right_handle = False
+
+        return {'FINISHED'}
