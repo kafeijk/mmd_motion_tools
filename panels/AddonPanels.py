@@ -1,6 +1,7 @@
 from ..operators.bone_operators import SimplifyBoneOperator, FlipPoseOperator
 from ..operators.camera_motion_fixer_operators import FindCameraSegmentOperator, CameraMotionFixerOperator
-from ..operators.motion_fixer_operators import MotionFixerOperator, CopyRangeOperator, RemoveOuterKeyframesOperator
+from ..operators.motion_fixer_operators import MotionFixerOperator, CopyRangeOperator, RemoveOuterKeyframesOperator, \
+    RemoveInnerKeyframesOperator
 from ..operators.utility_operators import ImportVmdPhysicsOperator, RemovePhysicalBoneAnimationOperator
 from ..utils import *
 
@@ -70,9 +71,12 @@ class MotionFixer_PT_Panel(bpy.types.Panel):
         col = layout.column()
 
         col.operator(CopyRangeOperator.bl_idname, text=CopyRangeOperator.bl_label)
+
         row = col.row(align=True)
-        row.operator(MotionFixerOperator.bl_idname, text=MotionFixerOperator.bl_label)
+        row.operator(RemoveInnerKeyframesOperator.bl_idname, text=RemoveInnerKeyframesOperator.bl_label)
         row.operator(RemoveOuterKeyframesOperator.bl_idname, text=RemoveOuterKeyframesOperator.bl_label)
+
+        col.operator(MotionFixerOperator.bl_idname, text=MotionFixerOperator.bl_label)
 
 
 class CameraMotionFixer_PT_Panel(bpy.types.Panel):

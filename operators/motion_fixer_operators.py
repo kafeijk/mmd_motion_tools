@@ -31,6 +31,48 @@ class MotionBaseOperator:
 
         return armature, bones
 
+    def check_multi(self, context):
+        result = self.check_basic(context)
+        if not result:
+            return None
+
+        armature, bones = result
+        action = armature.animation_data.action
+        current_frame = context.scene.frame_current
+
+        # 记录所有骨骼关键帧的最大范围
+        frame_start = None
+        frame_end = None
+
+        for pb in bones:
+            frames = get_selected_frames(action, f'pose.bones["{pb.name}"]')
+
+            if frames is None:
+                self.report({'ERROR'}, f'请选择 {pb.name} 的关键帧!')
+                return None
+
+            if not frames:
+                self.report({'ERROR'}, f'请选择 {pb.name} 连续的关键帧!')
+                return None
+
+            # 获取当前骨骼的关键帧范围
+            current_start = min(frames)
+            current_end = max(frames)
+
+            if frame_start is None or current_start < frame_start:
+                frame_start = current_start
+
+            if frame_end is None or current_end > frame_end:
+                frame_end = current_end
+
+        # 单个骨骼时检查当前帧是否在所选范围内，多骨骼默认取最大范围，因此必定在范围内
+        if len(bones) == 1:
+            if current_frame < frame_start or current_frame > frame_end:
+                self.report({'ERROR'}, '当前帧不在所选关键帧范围内!')
+                return None
+
+        return armature, bones, frame_start, frame_end
+
     def get_armature(self, context):
         obj = context.active_object
 
@@ -138,51 +180,9 @@ class RemoveOuterKeyframesOperator(MotionBaseOperator, bpy.types.Operator):
         self.margin = context.scene.mmd_motion_tools_fix_motion.margin
         return self.execute(context)
 
-    def check(self, context):
-        result = self.check_basic(context)
-        if not result:
-            return None
-
-        armature, bones = result
-        action = armature.animation_data.action
-        current_frame = context.scene.frame_current
-
-        # 记录所有骨骼关键帧的最大范围
-        frame_start = None
-        frame_end = None
-
-        for pb in bones:
-            frames = get_selected_frames(action, f'pose.bones["{pb.name}"]')
-
-            if frames is None:
-                self.report({'ERROR'}, f'请选择 {pb.name} 的关键帧!')
-                return None
-
-            if not frames:
-                self.report({'ERROR'}, f'请选择 {pb.name} 连续的关键帧!')
-                return None
-
-            # 获取当前骨骼的关键帧范围
-            current_start = min(frames)
-            current_end = max(frames)
-
-            if frame_start is None or current_start < frame_start:
-                frame_start = current_start
-
-            if frame_end is None or current_end > frame_end:
-                frame_end = current_end
-
-        # 单个骨骼时检查当前帧是否在所选范围内，多骨骼默认取最大范围，因此必定在范围内
-        if len(bones) == 1:
-            if current_frame < frame_start or current_frame > frame_end:
-                self.report({'ERROR'}, '当前帧不在所选关键帧范围内!')
-                return None
-
-        return armature, bones, frame_start, frame_end
-
     def execute(self, context):
         context.scene.mmd_motion_tools_fix_motion.margin = self.margin
-        result = self.check(context)
+        result = self.check_multi(context)
         if not result:
             return {'CANCELLED'}
 
@@ -267,3 +267,96 @@ class CopyRangeOperator(MotionBaseOperator, bpy.types.Operator):
         select_pose_bone(active_pb, False)
         if len(target_bones) == 1:
             armature.data.bones.active = armature.data.bones[target_bones[0].name]
+
+
+class RemoveInnerKeyframesOperator(MotionBaseOperator, bpy.types.Operator):
+    bl_idname = "mmd_motion_tools.remove_inner_keyframe"
+    bl_label = "删除内侧帧"
+    bl_description = "删除选中关键帧内侧的关键帧"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    ensure_boundary: bpy.props.BoolProperty(
+        name="注册边界帧",
+        description="注册边界关键帧，保持边界姿势一致",
+        default=True,
+    )
+
+    def execute(self, context):
+        result = self.check_multi(context)
+        if not result:
+            return {'CANCELLED'}
+
+        if not self.remove_inner_keys(result):
+            return {'CANCELLED'}
+
+        return {'FINISHED'}
+
+    def remove_inner_keys(self, result):
+        armature, bones, frame_start, frame_end = result
+        action = armature.animation_data.action
+
+        for pb in bones:
+            path = f'pose.bones["{pb.name}"]'
+
+            # 避免 key 为 array_index 导致 data_path 被覆盖
+            fcurve_map = {
+                (fc.data_path, fc.array_index): fc
+                for fc in action.fcurves
+                if fc.data_path.startswith(path)
+            }
+
+            if not fcurve_map:
+                continue
+
+            fcurves = fcurve_map.values()
+
+            # 确保范围两侧存在关键帧
+            if self.ensure_boundary:
+                ensure_boundary_keyframes(fcurves, frame_start, frame_end)
+
+            # 删除范围内部的关键帧
+            remove_inner_keys(fcurves, frame_start, frame_end)
+
+        return True
+
+
+def ensure_boundary_keyframes(fcurves, frame_start, frame_end):
+    """确保范围两侧存在关键帧，不存在则使用 evaluate 值注册"""
+    fcurves = list(fcurves)
+
+    for fc in fcurves:
+        frames = {int(kp.co[0]) for kp in fc.keyframe_points}
+
+        if frame_start not in frames:
+            value = fc.evaluate(frame_start)
+            fc.keyframe_points.insert(frame_start, value)
+
+        if frame_end not in frames:
+            value = fc.evaluate(frame_end)
+            fc.keyframe_points.insert(frame_end, value)
+
+    for fc in fcurves:
+        fc.update()
+
+
+def remove_inner_keys(fcurves, frame_start, frame_end):
+    """删除指定范围内部的关键帧，保留范围两端关键帧"""
+    fcurves = list(fcurves)
+
+    for fc in fcurves:
+        for i in range(len(fc.keyframe_points) - 1, -1, -1):
+            kp = fc.keyframe_points[i]
+            frame = int(kp.co[0])
+
+            if frame_start < frame < frame_end:
+                fc.keyframe_points.remove(kp)
+
+    for fc in fcurves:
+        fc.update()
+
+    # 差值方式改为线性
+    for fc in fcurves:
+        smooth_key_transition(fc, [(frame_start, frame_end)])
+
+    # 刷新场景以更新视图
+    bpy.context.scene.frame_current = bpy.context.scene.frame_current
