@@ -249,6 +249,9 @@ class CopyRangeOperator(MotionBaseOperator, bpy.types.Operator):
             self.report({'ERROR'}, '请选择连续的关键帧!')
             return False
 
+        frame_start = min(frames)
+        frame_end = max(frames)
+
         # 设置目标骨骼的关键帧选择状态
         for target_pb in target_bones:
             path = f'pose.bones["{target_pb.name}"]'
@@ -257,7 +260,8 @@ class CopyRangeOperator(MotionBaseOperator, bpy.types.Operator):
                     continue
 
                 for kp in fc.keyframe_points:
-                    selected = int(kp.co[0]) in frames
+                    frame = int(kp.co[0])
+                    selected = frame_start <= frame <= frame_end
                     # 若想取消，下面三个参数同时取消才生效
                     kp.select_control_point = selected
                     kp.select_left_handle = selected
