@@ -53,7 +53,7 @@ class MotionFixerOperator(MotionBaseOperator, bpy.types.Operator):
 
     margin: bpy.props.IntProperty(
         name="边距",
-        description="边缘关键帧范围",
+        description="外侧关键帧范围",
         default=3,
         min=0,
     )
@@ -121,15 +121,15 @@ class MotionFixerOperator(MotionBaseOperator, bpy.types.Operator):
         return True
 
 
-class RemoveMarginKeyFrameOperator(MotionBaseOperator, bpy.types.Operator):
-    bl_idname = "mmd_motion_tools.remove_margin_keyframe"
-    bl_label = "删除边缘帧"
-    bl_description = "删除选中关键帧前后指定边距范围内的关键帧"
+class RemoveOuterKeyframesOperator(MotionBaseOperator, bpy.types.Operator):
+    bl_idname = "mmd_motion_tools.remove_outer_keyframe"
+    bl_label = "删除外侧帧"
+    bl_description = "删除选中关键帧外侧指定边距范围内的关键帧"
     bl_options = {'REGISTER', 'UNDO'}
 
     margin: bpy.props.IntProperty(
         name="边距",
-        description="边缘关键帧范围",
+        description="外侧关键帧范围",
         default=3,
         min=0,
     )
@@ -138,9 +138,51 @@ class RemoveMarginKeyFrameOperator(MotionBaseOperator, bpy.types.Operator):
         self.margin = context.scene.mmd_motion_tools_fix_motion.margin
         return self.execute(context)
 
+    def check(self, context):
+        result = self.check_basic(context)
+        if not result:
+            return None
+
+        armature, bones = result
+        action = armature.animation_data.action
+        current_frame = context.scene.frame_current
+
+        # 记录所有骨骼关键帧的最大范围
+        frame_start = None
+        frame_end = None
+
+        for pb in bones:
+            frames = get_selected_frames(action, f'pose.bones["{pb.name}"]')
+
+            if frames is None:
+                self.report({'ERROR'}, f'请选择 {pb.name} 的关键帧!')
+                return None
+
+            if not frames:
+                self.report({'ERROR'}, f'请选择 {pb.name} 连续的关键帧!')
+                return None
+
+            # 获取当前骨骼的关键帧范围
+            current_start = min(frames)
+            current_end = max(frames)
+
+            if frame_start is None or current_start < frame_start:
+                frame_start = current_start
+
+            if frame_end is None or current_end > frame_end:
+                frame_end = current_end
+
+        # 单个骨骼时检查当前帧是否在所选范围内，多骨骼默认取最大范围，因此必定在范围内
+        if len(bones) == 1:
+            if current_frame < frame_start or current_frame > frame_end:
+                self.report({'ERROR'}, '当前帧不在所选关键帧范围内!')
+                return None
+
+        return armature, bones, frame_start, frame_end
+
     def execute(self, context):
         context.scene.mmd_motion_tools_fix_motion.margin = self.margin
-        result = self.check_basic(context)
+        result = self.check(context)
         if not result:
             return {'CANCELLED'}
 
@@ -151,30 +193,11 @@ class RemoveMarginKeyFrameOperator(MotionBaseOperator, bpy.types.Operator):
 
     def remove_margin_keys(self, result):
         # 获取骨骼信息
-        armature, bones = result
+        armature, bones, frame_start, frame_end = result
         action = armature.animation_data.action
 
         for pb in bones:
-            # 获取影响范围
-            frames = get_selected_frames(action, f'pose.bones["{pb.name}"]')
-            if frames is None:
-                self.report({'ERROR'}, '请选择关键帧!')
-                return False
-            if len(frames) == 0:
-                self.report({'ERROR'}, '请选择连续的关键帧!')
-                return False
-
-            frame_start = min(frames)
-            frame_end = max(frames)
-
-            # 获取骨骼关键帧旋转值
-            current_frame = bpy.context.scene.frame_current
-
-            if current_frame < frame_start or current_frame > frame_end:
-                self.report({'ERROR'}, '当前帧不在所选关键帧范围内!')
-                return False
-
-            # 删除范围边缘的关键帧
+            # 删除外侧的关键帧
             path = f'pose.bones["{pb.name}"]'
             # 避免key为array_index导致data_path被覆盖
             fcurve_map = {
