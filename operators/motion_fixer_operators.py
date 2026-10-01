@@ -100,7 +100,7 @@ class MotionFixerOperator(MotionBaseOperator, bpy.types.Operator):
 
     ensure_current: bpy.props.BoolProperty(
         name="注册当前帧",
-        description="注册当前关键帧，保持修改前后姿势一致",   # 选中多个骨骼且当前帧在边界上时，可能会因为缺帧导致修改前后姿势不一致
+        description="注册当前关键帧，保持修改前后姿势一致",  # 选中多个骨骼且当前帧在边界上时，可能会因为缺帧导致修改前后姿势不一致
         default=False,
     )
 
@@ -145,8 +145,8 @@ class MotionFixerOperator(MotionBaseOperator, bpy.types.Operator):
                 # 获取旋转值偏移量
                 offset = calculate_quaternion_offset(old_q, current_q)
                 # 应用旋转变化
-                apply_transform(armature, f'pose.bones["{pb.name}"].rotation_quaternion', offset, frame_start, frame_end,
-                                current_q, margin=self.margin)
+                apply_transform(armature, f'pose.bones["{pb.name}"].rotation_quaternion', offset, frame_start,
+                                frame_end, current_q, margin=self.margin)
 
             # 获取骨骼关键帧位置
             old_loc = get_location(armature, f'pose.bones["{pb.name}"].location', current_frame)
@@ -156,8 +156,8 @@ class MotionFixerOperator(MotionBaseOperator, bpy.types.Operator):
                 # 获取位置偏移量
                 offset = current_loc - old_loc
                 # 应用位置变化
-                apply_transform(armature, f'pose.bones["{pb.name}"].location', offset, frame_start, frame_end, current_loc,
-                                margin=self.margin)
+                apply_transform(armature, f'pose.bones["{pb.name}"].location', offset, frame_start, frame_end,
+                                current_loc, margin=self.margin)
 
         return True
 
@@ -265,11 +265,6 @@ class CopyRangeOperator(MotionBaseOperator, bpy.types.Operator):
                     kp.select_control_point = selected
                     kp.select_left_handle = selected
                     kp.select_right_handle = selected
-
-        # 取消源骨骼的选中状态，仅保留目标骨骼
-        select_pose_bone(active_pb, False)
-        if len(target_bones) == 1:
-            armature.data.bones.active = armature.data.bones[target_bones[0].name]
 
 
 class RemoveInnerKeyframesOperator(MotionBaseOperator, bpy.types.Operator):
