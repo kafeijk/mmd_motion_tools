@@ -65,11 +65,9 @@ class MotionBaseOperator:
             if frame_end is None or current_end > frame_end:
                 frame_end = current_end
 
-        # 单个骨骼时检查当前帧是否在所选范围内，多骨骼默认取最大范围，因此必定在范围内
-        if len(bones) == 1:
-            if current_frame < frame_start or current_frame > frame_end:
-                self.report({'ERROR'}, '当前帧不在所选关键帧范围内!')
-                return None
+        if current_frame < frame_start or current_frame > frame_end:
+            self.report({'ERROR'}, '当前帧不在所选关键帧范围内!')
+            return None
 
         return armature, bones, frame_start, frame_end
 
@@ -100,13 +98,19 @@ class MotionFixerOperator(MotionBaseOperator, bpy.types.Operator):
         min=0,
     )
 
+    ensure_current: bpy.props.BoolProperty(
+        name="注册当前帧",
+        description="注册当前关键帧，保持修改前后姿势一致",   # 选中多个骨骼且当前帧在边界上时，可能会因为缺帧导致修改前后姿势不一致
+        default=False,
+    )
+
     def invoke(self, context, event):
         self.margin = context.scene.mmd_motion_tools_fix_motion.margin
         return self.execute(context)
 
     def execute(self, context):
         context.scene.mmd_motion_tools_fix_motion.margin = self.margin
-        result = self.check_basic(context, 1)
+        result = self.check_multi(context)
         if not result:
             return {'CANCELLED'}
 
@@ -116,49 +120,44 @@ class MotionFixerOperator(MotionBaseOperator, bpy.types.Operator):
         return {'FINISHED'}
 
     def fix_motion(self, context, result):
-        # 获取骨骼信息
-        armature, bones = result
-        pb = bones[0]
+        armature, bones, frame_start, frame_end = result
         action = armature.animation_data.action
-
-        # 获取影响范围
-        frames = get_selected_frames(action, f'pose.bones["{pb.name}"]')
-        if frames is None:
-            self.report({'ERROR'}, '请选择关键帧!')
-            return False
-        if len(frames) == 0:
-            self.report({'ERROR'}, '请选择连续的关键帧!')
-            return False
-        frame_start = min(frames)
-        frame_end = max(frames)
-
-        # 获取骨骼关键帧旋转值
         current_frame = context.scene.frame_current
 
-        if current_frame < frame_start or current_frame > frame_end:
-            self.report({'ERROR'}, '当前帧不在所选关键帧范围内!')
-            return False
+        for pb in bones:
+            # 确保当前帧存在关键帧
+            if self.ensure_current:
+                fcurve_map = {
+                    (fc.data_path, fc.array_index): fc
+                    for fc in action.fcurves
+                    if fc.data_path.startswith(f'pose.bones["{pb.name}"]')
+                }
 
-        old_q = get_quaternion(armature, pb.name, current_frame)
-        if old_q:
-            # 获取骨骼当前旋转值
-            current_q = pb.rotation_quaternion.copy()
-            # 获取旋转值偏移量
-            offset = calculate_quaternion_offset(old_q, current_q)
-            # 应用旋转变化
-            apply_transform(armature, f'pose.bones["{pb.name}"].rotation_quaternion', offset, frame_start, frame_end,
-                            current_q, margin=self.margin)
+                if not fcurve_map:
+                    continue
 
-        # 获取骨骼关键帧位置
-        old_loc = get_location(armature, f'pose.bones["{pb.name}"].location', current_frame)
-        if old_loc:
-            # 获取当前骨骼位置
-            current_loc = pb.location.copy()
-            # 获取位置偏移量
-            offset = current_loc - old_loc
-            # 应用位置变化
-            apply_transform(armature, f'pose.bones["{pb.name}"].location', offset, frame_start, frame_end, current_loc,
-                            margin=self.margin)
+                ensure_keyframes(fcurve_map.values(), current_frame, current_frame)
+
+            old_q = get_quaternion(armature, pb.name, current_frame)
+            if old_q:
+                # 获取骨骼当前旋转值
+                current_q = pb.rotation_quaternion.copy()
+                # 获取旋转值偏移量
+                offset = calculate_quaternion_offset(old_q, current_q)
+                # 应用旋转变化
+                apply_transform(armature, f'pose.bones["{pb.name}"].rotation_quaternion', offset, frame_start, frame_end,
+                                current_q, margin=self.margin)
+
+            # 获取骨骼关键帧位置
+            old_loc = get_location(armature, f'pose.bones["{pb.name}"].location', current_frame)
+            if old_loc:
+                # 获取当前骨骼位置
+                current_loc = pb.location.copy()
+                # 获取位置偏移量
+                offset = current_loc - old_loc
+                # 应用位置变化
+                apply_transform(armature, f'pose.bones["{pb.name}"].location', offset, frame_start, frame_end, current_loc,
+                                margin=self.margin)
 
         return True
 
@@ -316,7 +315,7 @@ class RemoveInnerKeyframesOperator(MotionBaseOperator, bpy.types.Operator):
 
             # 确保范围两侧存在关键帧
             if self.ensure_boundary:
-                ensure_boundary_keyframes(fcurves, frame_start, frame_end)
+                ensure_keyframes(fcurves, frame_start, frame_end)
 
             # 删除范围内部的关键帧
             remove_inner_keys(fcurves, frame_start, frame_end)
@@ -324,7 +323,7 @@ class RemoveInnerKeyframesOperator(MotionBaseOperator, bpy.types.Operator):
         return True
 
 
-def ensure_boundary_keyframes(fcurves, frame_start, frame_end):
+def ensure_keyframes(fcurves, frame_start, frame_end):
     """确保范围两侧存在关键帧，不存在则使用 evaluate 值注册"""
     fcurves = list(fcurves)
 
