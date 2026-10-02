@@ -44,7 +44,7 @@ class ImportVmdPhysicsOperator(bpy.types.Operator, ImportHelper):
         obj = context.active_object
         root = find_pmx_root_with_child(obj)
         physical_bones = get_physical_bone(root)
-        if physical_bones is None:
+        if not physical_bones:
             self.report({'ERROR'}, "当前模型不存在受物理影响骨骼!")
             return False
 
