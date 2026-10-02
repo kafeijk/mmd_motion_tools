@@ -1,5 +1,9 @@
+from contextlib import contextmanager
+from pprint import pprint
+
 from bpy_extras.io_utils import ImportHelper
 
+from .motion_fixer_operators import MotionBaseOperator
 from ..utils import *
 
 
@@ -346,3 +350,428 @@ def set_physical_bone_ik(armature, physical_bones, enabled=False):
     # 关闭 IK
     for ik_name in ik_names:
         pose_bones[ik_name].mmd_ik_toggle = enabled
+
+
+class FindRepeatedMotionOperator(MotionBaseOperator, bpy.types.Operator):
+    bl_idname = "mmd_motion_tools.find_repeated_motion"
+    bl_label = "查找"
+    bl_description = "查找指定骨骼中连续重复的动作帧"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    threshold: bpy.props.IntProperty(
+        name="最小连续重复帧数",
+        description="连续重复的最少帧数",
+        default=20, # 更小则无意义，更大可能导致关键帧数量不足
+        min=2,
+    )
+
+    error: bpy.props.FloatProperty(
+        name="最大变化幅度",
+        description="前后两帧动作允许的最大变化幅度",
+        default=100,
+        min=0,
+        max=100,
+        subtype='PERCENTAGE',
+        precision=0,
+        step=1,
+    )
+
+    def execute(self, context):
+        props = context.scene.mmd_motion_tools_find_repeated_motion
+        props.repeated_index = -1
+        result = self.check_basic(context)
+        if not result:
+            return {'CANCELLED'}
+
+        armature, bones = result
+        bones = [pb for pb in bones if is_pose_bone_selected(pb)]
+
+        if len(bones) > 20:
+            self.report({'ERROR'}, '最多只能选择20根骨骼!')
+            return {'FINISHED'}
+
+        action = armature.animation_data.action
+        keyframes = self.get_keyframes(action, bones)
+
+        if len(keyframes) < self.threshold:
+            self.report({'ERROR'}, '关键帧数量不足!')
+            return {'CANCELLED'}
+
+        repeated = self.find_repeated(props, keyframes, bones, action)
+
+        if not repeated:
+            self.report({'INFO'}, '未找到重复动作!')
+            return {'FINISHED'}
+
+        props.repeated.clear()
+        repeated_frames = set()
+        involved_frames = set()
+        for r in repeated:
+            item = props.repeated.add()
+            item.start = r[0]
+            item.end = r[1]
+            item.repeat_start = r[2]
+            item.repeat_end = r[3]
+
+            repeated_frames.update(range(r[0], r[1] + 1))
+
+            involved_frames.update(range(r[0], r[1] + 1))
+            involved_frames.update(range(r[2], r[3] + 1))
+
+        self.report({'INFO'},
+                    f'找到 {len(repeated)} 组重复动作，重复 {len(repeated_frames)} 帧，共涉及 {len(involved_frames)} 帧动作')
+        return {'FINISHED'}
+
+    def get_keyframes(self, action, bones):
+        frames = set()
+
+        for pb in bones:
+            path = f'pose.bones["{pb.name}"]'
+
+            for fc in action.fcurves:
+                if not fc.data_path.startswith(path):
+                    continue
+
+                for kp in fc.keyframe_points:
+                    frames.add(int(kp.co[0]))
+
+        return sorted(frames)
+
+    def build_motion_fcurve_map(self, action, bones):
+        pattern = re.compile(r'pose\.bones\["(.+?)"\]\.(.+)')
+        bone_names = {pb.name for pb in bones}
+        valid_props = {"rotation_quaternion", "location", }
+
+        result = {}
+        for fc in action.fcurves:
+            match = pattern.match(fc.data_path)
+            if not match:
+                continue
+
+            bone_name = match.group(1)
+            prop = match.group(2)
+            if bone_name not in bone_names:
+                continue
+            if prop not in valid_props:
+                continue
+
+            result[(prop, bone_name, fc.array_index)] = fc
+
+        return result
+
+    def get_signature(self, motion_fcurves, bones, frame):
+        values = []
+        for pb in bones:
+            # rotation_quaternion 4个分量
+            for index in range(4):
+                fc = motion_fcurves.get(("rotation_quaternion", pb.name, index))
+                if fc:
+                    values.append(fc.evaluate(frame))
+                else:
+                    values.append(0.0)
+
+            # location 3个分量
+            for index in range(3):
+                fc = motion_fcurves.get(("location", pb.name, index))
+                if fc:
+                    values.append(fc.evaluate(frame))
+                else:
+                    values.append(0.0)
+
+        return tuple(values)
+
+    def compare_signature(self, props, a, b):
+        """比较两个动作状态是否接近"""
+        if len(a) != len(b):
+            return False
+
+        for x, y in zip(a, b):
+            if x == 0:
+                if y != 0:
+                    return False
+                continue
+
+            if abs(x - y) / abs(x) > (self.error / 100):
+                return False
+
+        return True
+
+    @timeit
+    def find_repeated(self, props, keyframes, bones, action):
+        """寻找重复帧。首先筛选出存在重复的单帧，再以此为起点向后匹配连续重复帧"""
+        frame_start = min(keyframes)
+        frame_end = max(keyframes)
+        threshold = self.threshold
+
+        # signature -> 含相同signature的帧数列表
+        signature_map = {}
+        signatures = [None] * (frame_end + 1)
+
+        # 构建 (prop, bone_name, fc.array_index) -> fcurve 的映射
+        motion_fcurves = self.build_motion_fcurve_map(action, bones)
+
+        # 关键帧处signature的获取，signature_map 用于寻找重复的单帧，可以避免在一开始就进行全量帧的比对
+        for frame in keyframes:
+            signature = self.get_signature(motion_fcurves, bones, frame)
+            signatures[frame] = signature
+            signature_map.setdefault(signature, []).append(frame)
+
+        # for frame in keyframes:
+        #     signature = self.get_signature(motion_fcurves, bones, frame)
+        #     signatures[frame] = signature
+        #
+        #     matched = False
+        #
+        #     for existing_signature, frames in signature_map.items():
+        #         if self.compare_signature(props, existing_signature, signature):
+        #             frames.append(frame)
+        #             matched = True
+        #             break
+        #
+        #     if not matched:
+        #         signature_map[signature] = [frame]
+
+        # 非关键帧处signature的获取，signatures 用于寻找重复的连续帧
+        keyframe_set = set(keyframes)
+        for i in range(frame_start, frame_end + 1):
+            if i in keyframe_set:
+                continue
+            signature = self.get_signature(motion_fcurves, bones, i)
+            signatures[i] = signature
+
+        # 过滤掉 signature 未出现重复的项
+        signature_map = {
+            signature: frame_list
+            for signature, frame_list in signature_map.items()
+            if len(frame_list) > 1}
+
+        repeated_pairs = []
+        for signature, same_frames in signature_map.items():
+            count = len(same_frames)
+            for i in range(count):
+                frame_a = same_frames[i]
+                for j in range(i + 1, count):
+                    frame_b = same_frames[j]
+
+                    length = 1
+                    while frame_a + length <= frame_end and frame_b + length <= frame_end:
+                        next_a = frame_a + length
+                        next_b = frame_b + length
+                        sig_a = signatures[next_a]
+                        sig_b = signatures[next_b]
+
+                        if not self.compare_signature(props, sig_a, sig_b):
+                            break
+
+                        length += 1
+
+                    if length >= threshold:
+                        repeated_pairs.append({
+                            "start": frame_a,
+                            "end": frame_a + length - 1,
+                            "repeat_start": frame_b,
+                            "repeat_end": frame_b + length - 1
+                        })
+        print(f"repeated_pairs:{len(repeated_pairs)}")
+        return self.merge_repeated(repeated_pairs)
+
+    def merge_repeated(self, repeated_pairs):
+        """去除被更大重复区间包含的小重复区间，保留最大重复范围"""
+        if not repeated_pairs:
+            return []
+
+        # 按重复长度排序，大的优先
+        repeated_pairs.sort(key=lambda x: (x["end"] - x["start"], x["repeat_end"] - x["repeat_start"]), reverse=True)
+
+        filtered = []
+        for curr in repeated_pairs:
+            contained = False
+            for exist in filtered:
+                # 第一段被包含
+                first_inside = exist["start"] <= curr["start"] and exist["end"] >= curr["end"]
+                # 第二段被包含
+                second_inside = exist["repeat_start"] <= curr["repeat_start"] and exist["repeat_end"] >= curr[
+                    "repeat_end"]
+
+                if first_inside and second_inside:
+                    contained = True
+                    break
+
+                # 如果 curr 比已经保存的 exist 范围更大，则删除小范围的 exist，把 curr 保留下来。
+                first_inside = curr["start"] <= exist["start"] and curr["end"] >= exist["end"]
+                second_inside = curr["repeat_start"] <= exist["repeat_start"] and curr["repeat_end"] >= exist[
+                    "repeat_end"]
+
+                if first_inside and second_inside:
+                    filtered.remove(exist)
+                    break
+
+            if not contained:
+                filtered.append(curr)
+
+        filtered = [(x["start"], x["end"], x["repeat_start"], x["repeat_end"]) for x in filtered]
+        # 先按照 start 升序，如果 start 一致，则按照连续帧数量排序
+        filtered.sort(key=lambda x: (x[0], x[1] - x[0]))
+
+        return filtered
+
+    def select_frames(self, action, bones, repeated):
+        for pb in bones:
+            path = f'pose.bones["{pb.name}"]'
+
+            for fc in action.fcurves:
+                if not fc.data_path.startswith(path):
+                    continue
+
+                for kp in fc.keyframe_points:
+                    frame = int(kp.co[0])
+
+                    selected = any(
+                        item["start"] <= frame <= item["end"]
+                        or item["repeat_start"] <= frame <= item["repeat_end"]
+                        for item in repeated
+                    )
+
+                    kp.select_control_point = selected
+                    kp.select_left_handle = selected
+                    kp.select_right_handle = selected
+
+
+class JumpFrameOperator(bpy.types.Operator):
+    bl_idname = "mmd_motion_tools.jump_frame"
+    bl_label = "跳转帧"
+    bl_description = "跳转到指定关键帧"
+    bl_options = {'UNDO'}
+
+    frame: bpy.props.IntProperty()
+
+    def execute(self, context):
+        context.scene.frame_set(self.frame)
+        return {'FINISHED'}
+
+
+class ClearRepeatedOperator(bpy.types.Operator):
+    bl_idname = "mmd_motion_tools.clear_repeated"
+    bl_label = "清除"
+    bl_description = "清除查找重复帧结果"
+    bl_options = {'UNDO'}
+
+    def execute(self, context):
+        props = context.scene.mmd_motion_tools_find_repeated_motion
+        props.repeated.clear()
+        return {'FINISHED'}
+
+
+@contextmanager
+def dopesheet_override(context):
+    """
+    找 Dope Sheet，没有就临时把一个区域切成 Dope Sheet，退出时恢复
+
+    Window：操作系统层面的一个 Blender 窗口。可以有多个，比如用 新建窗口 分出去的。
+    Screen：一个窗口里的整套布局，也就是工作区（Layout、Animation 等标签页）。
+    Area：Screen 被分割出的一块块编辑器，比如 3D 视图、Dope Sheet、时间线。area.type 决定它是哪种编辑器，同一个 type 可能有不同 mode。
+    Region：Area 内部的功能分区。WINDOW 是主绘图区，HEADER、CHANNELS、UI 等是周围的辅助区域。
+    """
+    screen = context.screen
+    area = next((a for a in screen.areas if a.type == 'DOPESHEET_EDITOR'), None)
+
+    switched = False
+    old_type = None
+    old_mode = None
+
+    if area is None:
+        candidates = [a for a in screen.areas if a != context.area]
+        area = candidates[0] if candidates else screen.areas[0]
+        old_type = area.type
+        area.type = 'DOPESHEET_EDITOR'
+        switched = True
+    else:
+        # 已有 Dope Sheet：修改前先记录它原来的 mode
+        old_mode = area.spaces.active.mode
+
+    space = area.spaces.active
+    try:
+        space.mode = 'DOPESHEET'
+
+        region = next((r for r in area.regions if r.type == 'WINDOW'), None)
+        if region is None:
+            raise RuntimeError('找不到 Dope Sheet 的 WINDOW 区域')
+        yield area, region
+    finally:
+        if switched:
+            area.type = old_type
+        else:
+            space.mode = old_mode
+
+
+class CopyKeyframesOperator(MotionBaseOperator, bpy.types.Operator):
+    bl_idname = "mmd_motion_tools.copy_keyframes"
+    bl_label = "复制关键帧"
+    bl_description = "复制指定范围内的关键帧到目标范围"
+    bl_options = {'UNDO'}
+
+    start: bpy.props.IntProperty()
+    end: bpy.props.IntProperty()
+    repeat_start: bpy.props.IntProperty()
+    repeat_end: bpy.props.IntProperty()
+
+    @staticmethod
+    def _bone_fcurves(action, bones):
+        """返回属于指定骨骼的所有 fcurve"""
+        paths = tuple(f'pose.bones["{pb.name}"]' for pb in bones)
+        return [fc for fc in action.fcurves if fc.data_path.startswith(paths)]
+
+    @staticmethod
+    def _select_keyframes(fcurves, start=None, end=None):
+        """
+        选中 [start, end] 范围内的关键帧，其余取消选中。
+        start/end 为 None 时取消全部选中。
+        返回范围内是否存在关键帧。
+        """
+        found = False
+        for fc in fcurves:
+            for kp in fc.keyframe_points:
+                sel = (
+                        start is not None
+                        and end is not None
+                        and start <= kp.co[0] <= end
+                )
+                found = found or sel
+                kp.select_control_point = sel
+                kp.select_left_handle = sel
+                kp.select_right_handle = sel
+        return found
+
+    def execute(self, context):
+        result = self.check_basic(context)
+        if not result:
+            return {'CANCELLED'}
+        armature, bones = result
+
+        scene = context.scene
+        fcurves = self._bone_fcurves(armature.animation_data.action, bones)
+
+        # 选中源范围的关键帧
+        if not self._select_keyframes(fcurves, self.start, self.end):
+            self.report({'ERROR'}, f'当前选中的骨骼在 {self.start} ~ {self.end} 范围内无关键帧')
+            return {'CANCELLED'}
+
+        # 在 Dope Sheet 中复制粘贴（没有则临时切换，结束后恢复）
+        old_frame = scene.frame_current
+        try:
+            with dopesheet_override(context) as (area, region):
+                with context.temp_override(area=area, region=region):
+                    bpy.ops.action.copy()
+                    scene.frame_current = self.repeat_start
+                    bpy.ops.action.paste()
+        except RuntimeError as e:
+            self.report({'ERROR'}, str(e))
+            return {'CANCELLED'}
+        finally:
+            scene.frame_current = old_frame
+
+        # 清除选中状态
+        self._select_keyframes(fcurves)
+
+        self.report({'INFO'}, f'已复制关键帧：{self.start}-{self.end} → {self.repeat_start}-{self.repeat_end}')
+        return {'FINISHED'}

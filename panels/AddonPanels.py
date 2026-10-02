@@ -2,7 +2,8 @@ from ..operators.bone_operators import SimplifyBoneOperator, FlipPoseOperator
 from ..operators.camera_motion_fixer_operators import FindCameraSegmentOperator, CameraMotionFixerOperator
 from ..operators.motion_fixer_operators import MotionFixerOperator, CopyRangeOperator, RemoveOuterKeyframesOperator, \
     RemoveInnerKeyframesOperator, DeselectKeyframesOperator
-from ..operators.utility_operators import ImportVmdPhysicsOperator, RemovePhysicalBoneAnimationOperator
+from ..operators.utility_operators import ImportVmdPhysicsOperator, RemovePhysicalBoneAnimationOperator, \
+    FindRepeatedMotionOperator, ClearRepeatedOperator, CopyKeyframesOperator
 from ..utils import *
 
 
@@ -11,7 +12,7 @@ class ToolsPanel(bpy.types.Panel):
     bl_idname = "MOTIONTOOLS_PT_tools"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = 'MMD Anim'
+    bl_category = 'MMD Motion'
     bl_order = 0
 
     def draw(self, context):
@@ -54,12 +55,44 @@ class ToolsPanel(bpy.types.Panel):
                          text=RemovePhysicalBoneAnimationOperator.bl_label, icon='REMOVE')
 
 
+class FindRepeatedMotion_PT_Panel(bpy.types.Panel):
+    bl_label = "查找重复动作"
+    bl_idname = "MOTIONTOOLS_PT_find_repeated_motion"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_parent_id = "MOTIONTOOLS_PT_motion_fixer"
+    bl_order = 0
+
+    def draw(self, context):
+        scene = context.scene
+        props = scene.mmd_motion_tools_find_repeated_motion
+
+        layout = self.layout
+        layout.use_property_split = True
+        layout.use_property_decorate = False
+        col = layout.column()
+
+        if len(props.repeated) != 0:
+            rows = min(len(props.repeated), 20)
+            col.template_list("MMD_UL_RepeatedRange", "", props, "repeated", props, "repeated_index", rows=rows)
+
+        row = col.row(align=True)
+        row2 = row.column(align=True)
+        row2.operator(FindRepeatedMotionOperator.bl_idname, text=FindRepeatedMotionOperator.bl_label)
+        if len(props.repeated) != 0:
+            row2.enabled = False
+        else:
+            row2.enabled = True
+        row3 = row.column(align=True)
+        row3.operator(ClearRepeatedOperator.bl_idname, text=ClearRepeatedOperator.bl_label)
+
+
 class MotionFixer_PT_Panel(bpy.types.Panel):
     bl_label = "模型动作修复"
     bl_idname = "MOTIONTOOLS_PT_motion_fixer"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = 'MMD Anim'
+    bl_category = 'MMD Motion'
     bl_order = 1
 
     def draw(self, context):
@@ -86,7 +119,7 @@ class CameraMotionFixer_PT_Panel(bpy.types.Panel):
     bl_idname = "MOTIONTOOLS_PT_camera_motion_fixer"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = 'MMD Anim'
+    bl_category = 'MMD Motion'
     bl_order = 2
 
     def draw(self, context):
@@ -131,7 +164,7 @@ class AboutPanel(bpy.types.Panel):
     bl_label = "About"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'  # N面板
-    bl_category = 'MMD Anim'  # 追加到其它面板或独自一个面板
+    bl_category = 'MMD Motion'  # 追加到其它面板或独自一个面板
     bl_order = 3
     bl_options = {'DEFAULT_CLOSED'}
 
@@ -146,3 +179,28 @@ class AboutPanel(bpy.types.Panel):
             text='版本号：' + str([addon.bl_info.get('version', (-1, -1, -1)) for addon in addon_utils.modules() if
                                   addon.bl_info['name'] == 'mmd_motion_tools'][0]))
         col.label(text='作者：KafeiMMD')
+
+
+class MMD_UL_RepeatedRange(bpy.types.UIList):
+
+    def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
+        frame = context.scene.frame_current
+        row = layout.row(align=True)
+
+        row.operator("mmd_motion_tools.jump_frame", text=str(item.start)).frame = item.start
+        row.operator("mmd_motion_tools.jump_frame", text=str(item.end)).frame = item.end
+
+        button = row.row(align=True)
+        button.ui_units_x = 1
+
+        active = (item.start <= frame <= item.end or
+                  item.repeat_start <= frame <= item.repeat_end)
+
+        op = button.operator(CopyKeyframesOperator.bl_idname, text="➜" if active else "→")
+        op.start = item.start
+        op.end = item.end
+        op.repeat_start = item.repeat_start
+        op.repeat_end = item.repeat_end
+
+        row.operator("mmd_motion_tools.jump_frame", text=str(item.repeat_start)).frame = item.repeat_start
+        row.operator("mmd_motion_tools.jump_frame", text=str(item.repeat_end)).frame = item.repeat_end
