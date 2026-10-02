@@ -218,25 +218,27 @@ class CopyRangeOperator(MotionBaseOperator, bpy.types.Operator):
     bl_options = {'REGISTER', 'UNDO'}
 
     def execute(self, context):
-        self.copy_range(context)
-        return {'FINISHED'}
-
-    def copy_range(self, context):
         result = self.check_basic(context)
         if not result:
-            return
+            return {'CANCELLED'}
 
+        if not self.copy_range(context, result):
+            return {'CANCELLED'}
+
+        return {'FINISHED'}
+
+    def copy_range(self, context, result):
         # 获取骨骼信息
         armature, bones = result
         active_pb = armature.pose.bones.get(armature.data.bones.active.name) if armature.data.bones.active else None
         if not active_pb:
             self.report({'ERROR'}, '未检测到激活骨骼!')
-            return
+            return False
 
         target_bones = [pb for pb in bones if pb != active_pb]
         if not target_bones:
             self.report({'ERROR'}, '未检测到目标骨骼!')
-            return
+            return False
 
         # 获取影响范围
         action = armature.animation_data.action
@@ -265,7 +267,7 @@ class CopyRangeOperator(MotionBaseOperator, bpy.types.Operator):
                     kp.select_control_point = selected
                     kp.select_left_handle = selected
                     kp.select_right_handle = selected
-
+        return True
 
 class RemoveInnerKeyframesOperator(MotionBaseOperator, bpy.types.Operator):
     bl_idname = "mmd_motion_tools.remove_inner_keyframe"
