@@ -776,9 +776,7 @@ class CopyKeyframesOperator(MotionBaseOperator, bpy.types.Operator):
                         and start <= kp.co[0] <= end
                 )
                 found = found or sel
-                kp.select_control_point = sel
-                kp.select_left_handle = sel
-                kp.select_right_handle = sel
+                set_keyframe_selected(kp, sel)
         return found
 
     def execute(self, context):

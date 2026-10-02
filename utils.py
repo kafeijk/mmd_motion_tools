@@ -160,6 +160,18 @@ def select_pose_bone(pb, status):
         pb.select = status
 
 
+def set_keyframe_selected(kp, selected):
+    """设置关键帧的选中状态，三个标记同时设置才生效"""
+    kp.select_control_point = selected
+    kp.select_left_handle = selected
+    kp.select_right_handle = selected
+
+
+def is_keyframe_selected(kp):
+    """判断关键帧是否处于选中状态，三个标记中任一为真即视为选中"""
+    return bool(kp.select_control_point or kp.select_left_handle or kp.select_right_handle)
+
+
 def is_pose_bone_selected(pb):
     """
     获取姿态模式下骨骼的选中状态
@@ -370,7 +382,7 @@ def get_selected_frames(action, path, array_index=None):
             frame = int(kp.co[0])
             all_frames.add(frame)
 
-            if kp.select_control_point or kp.select_left_handle or kp.select_right_handle:
+            if is_keyframe_selected(kp):
                 selected_frames.add(frame)
 
     # 无选中关键帧

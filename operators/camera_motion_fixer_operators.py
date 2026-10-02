@@ -247,10 +247,7 @@ class FindCameraSegmentOperator(CameraBaseOperator, bpy.types.Operator):
         for fc in filtered_fcurves:
             for kp in fc.keyframe_points:
                 selected = start <= kp.co[0] <= end
-                # 若想取消，下面三个参数同时取消才生效
-                kp.select_control_point = selected
-                kp.select_left_handle = selected
-                kp.select_right_handle = selected
+                set_keyframe_selected(kp, selected)
 
         return True
 

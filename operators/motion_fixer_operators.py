@@ -262,11 +262,7 @@ class CopyRangeOperator(MotionBaseOperator, bpy.types.Operator):
 
                 for kp in fc.keyframe_points:
                     frame = int(kp.co[0])
-                    selected = frame_start <= frame <= frame_end
-                    # 若想取消，下面三个参数同时取消才生效
-                    kp.select_control_point = selected
-                    kp.select_left_handle = selected
-                    kp.select_right_handle = selected
+                    set_keyframe_selected(kp, frame_start <= frame <= frame_end)
         return True
 
 class RemoveInnerKeyframesOperator(MotionBaseOperator, bpy.types.Operator):
@@ -384,8 +380,6 @@ class DeselectKeyframesOperator(MotionBaseOperator, bpy.types.Operator):
                     continue
 
                 for kp in fc.keyframe_points:
-                    kp.select_control_point = False
-                    kp.select_left_handle = False
-                    kp.select_right_handle = False
+                    set_keyframe_selected(kp, False)
 
         return {'FINISHED'}
