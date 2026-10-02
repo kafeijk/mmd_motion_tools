@@ -1,5 +1,4 @@
 from contextlib import contextmanager
-from pprint import pprint
 
 from bpy_extras.io_utils import ImportHelper
 
@@ -608,27 +607,6 @@ class FindRepeatedMotionBaseOperator(MotionBaseOperator):
         filtered.sort(key=lambda x: (x[0], x[1] - x[0]))
 
         return filtered
-
-    def select_frames(self, action, bones, repeated):
-        for pb in bones:
-            path = f'pose.bones["{pb.name}"]'
-
-            for fc in action.fcurves:
-                if not fc.data_path.startswith(path):
-                    continue
-
-                for kp in fc.keyframe_points:
-                    frame = int(kp.co[0])
-
-                    selected = any(
-                        item["start"] <= frame <= item["end"]
-                        or item["repeat_start"] <= frame <= item["repeat_end"]
-                        for item in repeated
-                    )
-
-                    kp.select_control_point = selected
-                    kp.select_left_handle = selected
-                    kp.select_right_handle = selected
 
 
 class FindRepeatedMotionOperator(FindRepeatedMotionBaseOperator, bpy.types.Operator):
