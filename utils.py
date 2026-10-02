@@ -495,7 +495,7 @@ def remove_margin_keys(fcurves, frame_start, frame_end, margin):
         fc.update()
 
     # 当前曲线最小关键帧
-    min_frame = int(min(kp.co[0] for kp in fc.keyframe_points))
+    min_frame = min(int(kp.co[0]) for fc in fcurves for kp in fc.keyframe_points)
 
     for fc in fcurves:
         for i in range(len(fc.keyframe_points) - 1, -1, -1):
