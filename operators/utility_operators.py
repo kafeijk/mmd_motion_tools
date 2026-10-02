@@ -358,7 +358,7 @@ class FindRepeatedMotionBaseOperator(MotionBaseOperator):
     threshold: bpy.props.IntProperty(
         name="最小连续重复帧数",
         description="连续重复的最少帧数",
-        default=20, # 更小则无意义，更大可能导致关键帧数量不足
+        default=20,  # 更小则无意义，更大可能导致关键帧数量不足
         min=2,
     )
 
@@ -384,7 +384,7 @@ class FindRepeatedMotionBaseOperator(MotionBaseOperator):
         bones = [pb for pb in bones if is_pose_bone_selected(pb)]
 
         if len(bones) > 20:
-            self.report({'ERROR'}, '最多只能选择20根骨骼!')
+            self.report({'ERROR'}, '最多只能选择20个骨骼!')
             return {'FINISHED'}
 
         action = armature.animation_data.action
@@ -651,6 +651,20 @@ class FindRepeatedMotionStrongOperator(FindRepeatedMotionBaseOperator, bpy.types
         default=100,  # 更小则无意义，更大可能导致关键帧数量不足
         min=2,
     )
+
+    def check_basic(self, context):
+        """强力查找需要与已有signature逐一模糊比对，只能选中一个骨骼"""
+        result = super().check_basic(context)
+        if not result:
+            return None
+
+        armature, bones = result
+
+        if len(bones) != 1:
+            self.report({'ERROR'}, '强力查找只支持选中一个骨骼!')
+            return None
+
+        return armature, bones
 
     def build_signature_map(self, props, motion_fcurves, bones, keyframes, signatures):
         """强力查找：与已有 signature 做模糊比对，在误差范围内即视为重复"""
