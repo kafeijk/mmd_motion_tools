@@ -828,10 +828,10 @@ class CopyKeyframesOperator(MotionBaseOperator, bpy.types.Operator):
             self.report({'ERROR'}, str(e))
             return {'CANCELLED'}
         finally:
+            # 恢复当前帧
             scene.frame_current = old_frame
-
-        # 清除选中状态
-        self._select_keyframes(fcurves)
+            # 清除选中状态
+            self._select_keyframes(fcurves)
 
         self.report({'INFO'}, f'已复制关键帧：{self.start}-{self.end} → {self.repeat_start}-{self.repeat_end}')
         return {'FINISHED'}
