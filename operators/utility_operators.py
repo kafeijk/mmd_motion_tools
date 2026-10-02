@@ -508,7 +508,6 @@ class FindRepeatedMotionBaseOperator(MotionBaseOperator):
 
         return True
 
-    @timeit
     def find_repeated(self, props, keyframes, bones, action):
         """寻找重复帧。首先筛选出存在重复的单帧，再以此为起点向后匹配连续重复帧"""
         frame_start = min(keyframes)
@@ -565,7 +564,6 @@ class FindRepeatedMotionBaseOperator(MotionBaseOperator):
                             "repeat_start": frame_b,
                             "repeat_end": frame_b + length - 1
                         })
-        print(f"repeated_pairs:{len(repeated_pairs)}")
         return self.merge_repeated(repeated_pairs)
 
     def merge_repeated(self, repeated_pairs):
