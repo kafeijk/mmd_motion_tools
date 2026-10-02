@@ -112,12 +112,12 @@ def deselect_all_objects():
 
 
 def show_object(obj):
-    """显示物体。在视图取消禁用选择，在视图中取消隐藏，在视图中取消禁用，在渲染中取消禁用"""
+    """显示物体"""
     set_visibility(obj, (False, False, False, False))
 
 
 def hide_object(obj):
-    """显示物体。在视图取消禁用选择，在视图中取消隐藏，在视图中取消禁用，在渲染中取消禁用"""
+    """隐藏物体"""
     set_visibility(obj, (True, True, True, True))
 
 
