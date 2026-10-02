@@ -352,11 +352,8 @@ def set_physical_bone_ik(armature, physical_bones, enabled=False):
         pose_bones[ik_name].mmd_ik_toggle = enabled
 
 
-class FindRepeatedMotionOperator(MotionBaseOperator, bpy.types.Operator):
-    bl_idname = "mmd_motion_tools.find_repeated_motion"
-    bl_label = "查找"
-    bl_description = "查找指定骨骼中连续重复的动作帧"
-    bl_options = {'REGISTER', 'UNDO'}
+class FindRepeatedMotionBaseOperator(MotionBaseOperator):
+    """查找重复动作基础类"""
 
     threshold: bpy.props.IntProperty(
         name="最小连续重复帧数",
@@ -393,8 +390,10 @@ class FindRepeatedMotionOperator(MotionBaseOperator, bpy.types.Operator):
         action = armature.animation_data.action
         keyframes = self.get_keyframes(action, bones)
 
-        if len(keyframes) < self.threshold:
-            self.report({'ERROR'}, '关键帧数量不足!')
+        frame_start = min(keyframes)
+        frame_end = max(keyframes)
+        if frame_end - frame_start + 1 < self.threshold:
+            self.report({'ERROR'}, '关键帧范围不足!')
             return {'CANCELLED'}
 
         repeated = self.find_repeated(props, keyframes, bones, action)
@@ -421,6 +420,10 @@ class FindRepeatedMotionOperator(MotionBaseOperator, bpy.types.Operator):
         self.report({'INFO'},
                     f'找到 {len(repeated)} 组重复动作，重复 {len(repeated_frames)} 帧，共涉及 {len(involved_frames)} 帧动作')
         return {'FINISHED'}
+
+    def build_signature_map(self, props, motion_fcurves, bones, keyframes, signatures):
+        """构建 signature -> 帧列表 的映射，同时填充关键帧处的 signatures。由子类实现查找策略"""
+        raise NotImplementedError
 
     def get_keyframes(self, action, bones):
         frames = set()
@@ -503,33 +506,14 @@ class FindRepeatedMotionOperator(MotionBaseOperator, bpy.types.Operator):
         frame_end = max(keyframes)
         threshold = self.threshold
 
-        # signature -> 含相同signature的帧数列表
-        signature_map = {}
+        # 存储每一帧的动作状态
         signatures = [None] * (frame_end + 1)
 
         # 构建 (prop, bone_name, fc.array_index) -> fcurve 的映射
         motion_fcurves = self.build_motion_fcurve_map(action, bones)
 
-        # 关键帧处signature的获取，signature_map 用于寻找重复的单帧，可以避免在一开始就进行全量帧的比对
-        for frame in keyframes:
-            signature = self.get_signature(motion_fcurves, bones, frame)
-            signatures[frame] = signature
-            signature_map.setdefault(signature, []).append(frame)
-
-        # for frame in keyframes:
-        #     signature = self.get_signature(motion_fcurves, bones, frame)
-        #     signatures[frame] = signature
-        #
-        #     matched = False
-        #
-        #     for existing_signature, frames in signature_map.items():
-        #         if self.compare_signature(props, existing_signature, signature):
-        #             frames.append(frame)
-        #             matched = True
-        #             break
-        #
-        #     if not matched:
-        #         signature_map[signature] = [frame]
+        # signature_map 用于寻找重复的单帧，可以避免在一开始就进行全量帧的比对
+        signature_map = self.build_signature_map(props, motion_fcurves, bones, keyframes, signatures)
 
         # 非关键帧处signature的获取，signatures 用于寻找重复的连续帧
         keyframe_set = set(keyframes)
@@ -635,6 +619,59 @@ class FindRepeatedMotionOperator(MotionBaseOperator, bpy.types.Operator):
                     kp.select_control_point = selected
                     kp.select_left_handle = selected
                     kp.select_right_handle = selected
+
+
+class FindRepeatedMotionOperator(FindRepeatedMotionBaseOperator, bpy.types.Operator):
+    bl_idname = "mmd_motion_tools.find_repeated_motion"
+    bl_label = "查找"
+    bl_description = "查找指定骨骼中连续重复的动作帧，仅匹配完全相同的动作状态，速度快"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def build_signature_map(self, props, motion_fcurves, bones, keyframes, signatures):
+        """普通查找：signature 严格相等才视为重复"""
+        signature_map = {}
+
+        for frame in keyframes:
+            signature = self.get_signature(motion_fcurves, bones, frame)
+            signatures[frame] = signature
+            signature_map.setdefault(signature, []).append(frame)
+
+        return signature_map
+
+
+class FindRepeatedMotionStrongOperator(FindRepeatedMotionBaseOperator, bpy.types.Operator):
+    bl_idname = "mmd_motion_tools.find_repeated_motion_strong"
+    bl_label = "强力查找"
+    bl_description = "查找单个骨骼中连续重复的动作帧，适用于动补等全帧插入的情形，速度慢"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    threshold: bpy.props.IntProperty(
+        name="最小连续重复帧数",
+        description="连续重复的最少帧数",
+        default=100,  # 更小则无意义，更大可能导致关键帧数量不足
+        min=2,
+    )
+
+    def build_signature_map(self, props, motion_fcurves, bones, keyframes, signatures):
+        """强力查找：与已有 signature 做模糊比对，在误差范围内即视为重复"""
+        signature_map = {}
+
+        for frame in keyframes:
+            signature = self.get_signature(motion_fcurves, bones, frame)
+            signatures[frame] = signature
+
+            matched = False
+
+            for existing_signature, frames in signature_map.items():
+                if self.compare_signature(props, existing_signature, signature):
+                    frames.append(frame)
+                    matched = True
+                    break
+
+            if not matched:
+                signature_map[signature] = [frame]
+
+        return signature_map
 
 
 class JumpFrameOperator(bpy.types.Operator):

@@ -3,7 +3,7 @@ from ..operators.camera_motion_fixer_operators import FindCameraSegmentOperator,
 from ..operators.motion_fixer_operators import MotionFixerOperator, CopyRangeOperator, RemoveOuterKeyframesOperator, \
     RemoveInnerKeyframesOperator, DeselectKeyframesOperator
 from ..operators.utility_operators import ImportVmdPhysicsOperator, RemovePhysicalBoneAnimationOperator, \
-    FindRepeatedMotionOperator, ClearRepeatedOperator, CopyKeyframesOperator
+    FindRepeatedMotionOperator, ClearRepeatedOperator, CopyKeyframesOperator, FindRepeatedMotionStrongOperator
 from ..utils import *
 
 
@@ -77,14 +77,14 @@ class FindRepeatedMotion_PT_Panel(bpy.types.Panel):
             col.template_list("MMD_UL_RepeatedRange", "", props, "repeated", props, "repeated_index", rows=rows)
 
         row = col.row(align=True)
-        row2 = row.column(align=True)
-        row2.operator(FindRepeatedMotionOperator.bl_idname, text=FindRepeatedMotionOperator.bl_label)
+        row.operator(FindRepeatedMotionOperator.bl_idname, text=FindRepeatedMotionOperator.bl_label)
+        row.operator(FindRepeatedMotionStrongOperator.bl_idname, text=FindRepeatedMotionStrongOperator.bl_label)
         if len(props.repeated) != 0:
-            row2.enabled = False
+            row.enabled = False
         else:
-            row2.enabled = True
-        row3 = row.column(align=True)
-        row3.operator(ClearRepeatedOperator.bl_idname, text=ClearRepeatedOperator.bl_label)
+            row.enabled = True
+        row = col.row(align=True)
+        row.operator(ClearRepeatedOperator.bl_idname, text=ClearRepeatedOperator.bl_label)
 
 
 class MotionFixer_PT_Panel(bpy.types.Panel):
