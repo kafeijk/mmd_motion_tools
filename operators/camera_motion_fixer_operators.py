@@ -283,7 +283,7 @@ def find_boundaries(fcurve):
     frames = sorted([int(kp.co[0]) for kp in fcurve.keyframe_points])
 
     if len(frames) < 2:
-        return []
+        return None, None, []
 
     result = []
     start = frames[0]
