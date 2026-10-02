@@ -390,10 +390,14 @@ class FindRepeatedMotionBaseOperator(MotionBaseOperator):
 
         if len(bones) > 20:
             self.report({'ERROR'}, '最多只能选择20个骨骼!')
-            return {'FINISHED'}
+            return {'CANCELLED'}
 
         action = armature.animation_data.action
         keyframes = self.get_keyframes(action, bones)
+
+        if not keyframes:
+            self.report({'ERROR'}, '所选骨骼无关键帧！')
+            return {'CANCELLED'}
 
         frame_start = min(keyframes)
         frame_end = max(keyframes)
