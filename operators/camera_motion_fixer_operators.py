@@ -1,7 +1,49 @@
 from ..utils import *
 
 
-class CameraMotionFixerOperator(bpy.types.Operator):
+class CameraBaseOperator:
+    """相机工具基础类"""
+
+    def check(self, context):
+        if not is_mmd_tools_enabled():
+            self.report({'ERROR'}, '未启用mmd_tools插件！')
+            return None
+
+        obj = context.active_object
+
+        # 校验MMD相机及MMD相机根对象是否存在
+        if is_mmd_camera_root(obj):
+            mmd_camera = obj
+            cameras = find_children(mmd_camera, "CAMERA")
+            if len(cameras) != 1 or not is_mmd_camera(cameras[0]):
+                self.report({'ERROR'}, '未检测到MMD相机，请检查!')
+                return None
+            camera = cameras[0]
+        else:
+            camera = obj
+            mmd_camera = find_mmd_camera_root(camera)
+            if not mmd_camera:
+                self.report({'ERROR'}, '未检测到MMD相机的根对象，请检查!')
+                return None
+
+        def check_animation(obj, name):
+            """校验动画数据是否存在"""
+            animation_data = obj.animation_data
+            if not animation_data or not animation_data.action:
+                self.report({'ERROR'}, f'未检测到{name}关键帧!')
+                return False
+            return True
+
+        if not check_animation(camera, "MMD相机"):
+            return None
+
+        if not check_animation(mmd_camera, "MMD相机根对象"):
+            return None
+
+        return mmd_camera, camera
+
+
+class CameraMotionFixerOperator(CameraBaseOperator, bpy.types.Operator):
     bl_idname = "mmd_motion_tools.fix_camera_motion"
     bl_label = "应用相机修改"
     bl_description = "计算MMD相机当前状态与关键帧状态的差值，并将该变化应用到选中的关键帧上"
@@ -14,48 +56,12 @@ class CameraMotionFixerOperator(bpy.types.Operator):
         min=0,
     )
 
-    def check_props(self, context):
-        if not is_mmd_tools_enabled():
-            self.report({'ERROR'}, '未启用mmd_tools插件！')
-            return False, None, None
-
-        obj = context.active_object
-
-        # 校验MMD相机及MMD相机根对象是否存在
-        if is_mmd_camera_root(obj):
-            mmd_camera = obj
-            cameras = find_children(mmd_camera, "CAMERA")
-            if len(cameras) != 1 or not is_mmd_camera(cameras[0]):
-                self.report({'ERROR'}, '未检测到MMD相机，请检查!')
-                return False, None, None
-            camera = cameras[0]
-        else:
-            camera = obj
-            mmd_camera = find_mmd_camera_root(camera)
-            if not mmd_camera:
-                self.report({'ERROR'}, '未检测到MMD相机的根对象，请检查!')
-                return False, None, None
-
-        def check_animation(obj, name):
-            """校验动画数据是否存在"""
-            animation_data = obj.animation_data
-            if not animation_data or not animation_data.action:
-                self.report({'ERROR'}, f'未检测到{name}关键帧!')
-                return False
-            return True
-
-        if not check_animation(camera, "MMD相机"):
-            return False, None, None
-
-        if not check_animation(mmd_camera, "MMD相机根对象"):
-            return False, None, None
-
-        return True, mmd_camera, camera
-
     def execute(self, context):
-        success, mmd_camera, camera = self.check_props(context)
-        if not success:
+        result = self.check(context)
+        if result is None:
             return {'CANCELLED'}
+
+        mmd_camera, camera = result
 
         if not self.fix_camera_motion(context, mmd_camera, camera):
             return {'CANCELLED'}
@@ -159,7 +165,7 @@ class CameraMotionFixerOperator(bpy.types.Operator):
         return True
 
 
-class FindCameraSegmentOperator(bpy.types.Operator):
+class FindCameraSegmentOperator(CameraBaseOperator, bpy.types.Operator):
     bl_idname = "mmd_motion_tools.find_camera_segment"
     bl_label = "查找片段"
     bl_description = "查找片段"
@@ -171,48 +177,12 @@ class FindCameraSegmentOperator(bpy.types.Operator):
         default=False
     )
 
-    def check_props(self, context):
-        if not is_mmd_tools_enabled():
-            self.report({'ERROR'}, '未启用mmd_tools插件！')
-            return False, None, None
-
-        obj = context.active_object
-
-        # 校验MMD相机及MMD相机根对象是否存在
-        if is_mmd_camera_root(obj):
-            mmd_camera = obj
-            cameras = find_children(mmd_camera, "CAMERA")
-            if len(cameras) != 1 or not is_mmd_camera(cameras[0]):
-                self.report({'ERROR'}, '未检测到MMD相机，请检查!')
-                return False, None, None
-            camera = cameras[0]
-        else:
-            camera = obj
-            mmd_camera = find_mmd_camera_root(camera)
-            if not mmd_camera:
-                self.report({'ERROR'}, '未检测到MMD相机的根对象，请检查!')
-                return False, None, None
-
-        def check_animation(obj, name):
-            """校验动画数据是否存在"""
-            animation_data = obj.animation_data
-            if not animation_data or not animation_data.action:
-                self.report({'ERROR'}, f'未检测到{name}关键帧!')
-                return False
-            return True
-
-        if not check_animation(camera, "MMD相机"):
-            return False, None, None
-
-        if not check_animation(mmd_camera, "MMD相机根对象"):
-            return False, None, None
-
-        return True, mmd_camera, camera
-
     def execute(self, context):
-        success, mmd_camera, camera = self.check_props(context)
-        if not success:
+        result = self.check(context)
+        if result is None:
             return {'CANCELLED'}
+
+        mmd_camera, camera = result
 
         if not self.find_camera_segment(context, mmd_camera, camera):
             return {'CANCELLED'}
@@ -220,7 +190,6 @@ class FindCameraSegmentOperator(bpy.types.Operator):
         return {'FINISHED'}
 
     def find_camera_segment(self, context, mmd_camera, camera):
-        """"""
         # 当前帧
         frame_current = context.scene.frame_current
 
