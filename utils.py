@@ -281,9 +281,10 @@ def get_quaternion(armature, bone_name, frame):
     若存在对应关键帧，则使用关键帧值；否则使用当前变换中的旋转值。
     若未检测到该骨骼的旋转关键帧，则返回 None。
     """
-    action = armature.animation_data.action
-    if not action:
+    animation_data = armature.animation_data
+    if not animation_data or not animation_data.action:
         return None
+    action = animation_data.action
 
     # 当前旋转值
     pb = armature.pose.bones.get(bone_name)
