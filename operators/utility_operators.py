@@ -106,6 +106,7 @@ class ImportVmdPhysicsOperator(bpy.types.Operator, ImportHelper):
 
         # 移除 copied_armature
         bpy.data.objects.remove(copied_armature, do_unlink=True)
+        bpy.ops.outliner.orphans_purge(do_local_ids=True, do_linked_ids=True, do_recursive=True)
 
         return {'FINISHED'}
 
