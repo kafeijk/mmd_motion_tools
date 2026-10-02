@@ -250,7 +250,8 @@ class FindCameraSegmentOperator(bpy.types.Operator):
                 last = max(last, curr_last)
 
         if not boundaries_list:
-            first = last = None
+            self.report({'ERROR'}, '未找到片段！')
+            return False
 
         # 获取最窄边界对
         start = first
