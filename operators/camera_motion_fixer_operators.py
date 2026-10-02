@@ -355,7 +355,7 @@ def clean_fcurves(fcurves, threshold=0.03):
         points = fcurve.keyframe_points
 
         if len(points) <= 2:
-            return
+            continue
 
         remove_points = []
 
