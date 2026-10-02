@@ -15,6 +15,10 @@ class CameraMotionFixerOperator(bpy.types.Operator):
     )
 
     def check_props(self, context):
+        if not is_mmd_tools_enabled():
+            self.report({'ERROR'}, '未启用mmd_tools插件！')
+            return False, None, None
+
         obj = context.active_object
 
         # 校验MMD相机及MMD相机根对象是否存在
@@ -168,6 +172,10 @@ class FindCameraSegmentOperator(bpy.types.Operator):
     )
 
     def check_props(self, context):
+        if not is_mmd_tools_enabled():
+            self.report({'ERROR'}, '未启用mmd_tools插件！')
+            return False, None, None
+
         obj = context.active_object
 
         # 校验MMD相机及MMD相机根对象是否存在

@@ -31,6 +31,10 @@ class SimplifyBoneOperator(bpy.types.Operator):
         return {'FINISHED'}
 
     def check_props(self, context):
+        if not is_mmd_tools_enabled():
+            self.report({'ERROR'}, "未启用mmd_tools插件！")
+            return None
+
         obj = context.active_object
 
         if not obj:
@@ -48,9 +52,6 @@ class SimplifyBoneOperator(bpy.types.Operator):
 
 def select_bake_bone(armature, mode):
     """选择用于烘焙动作的骨骼"""
-    if mode in ["ARM1", "ARM2", "KEYFRAME", "DEFAULT"] and not is_mmd_tools_enabled():
-        return
-
     bone_modes = {
         "ARM1": PMX_BAKE_BONES_ARM1,
         "ARM2": PMX_BAKE_BONES_ARM2,

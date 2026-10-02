@@ -30,6 +30,8 @@ class ImportVmdPhysicsOperator(bpy.types.Operator, ImportHelper):
 
     @classmethod
     def poll(cls, context):
+        if not is_mmd_tools_enabled():
+            return False
         obj = context.active_object
         if obj is None:
             return False
@@ -116,6 +118,9 @@ class RemovePhysicalBoneAnimationOperator(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context):
+        if not is_mmd_tools_enabled():
+            return False
+
         obj = context.active_object
         if obj is None:
             return False
@@ -203,7 +208,7 @@ def get_vmd_bones(filepath):
         try:
             from bl_ext.blender_org.mmd_tools.core import vmd
         except ImportError:
-            pass
+            return None
 
     vmd_file = vmd.File()
     vmd_file.load(filepath=filepath)
