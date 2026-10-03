@@ -7,6 +7,16 @@ class SimplifyBoneOperator(bpy.types.Operator):
     bl_description = "隐藏不参与K帧的骨骼"
     bl_options = {'REGISTER', 'UNDO'}
 
+    display_type: bpy.props.EnumProperty(
+        name="显示为",
+        description="显示骨骼的样式",
+        items=[
+            ("OCTAHEDRAL", "八面锥", "八面锥"),
+            ("STICK", "棍形", "棍形"),
+        ],
+        default="STICK",
+    )
+
     bake_mode: bpy.props.EnumProperty(
         name="显示范围",
         description="参与K帧的骨骼",
@@ -27,7 +37,7 @@ class SimplifyBoneOperator(bpy.types.Operator):
         for armature in armatures:
             if ".dummy_armature" in armature.name:
                 continue
-            select_bake_bone(armature, self.bake_mode)
+            select_bake_bone(armature, self.bake_mode, self.display_type)
         return {'FINISHED'}
 
     def check_props(self, context):
@@ -50,7 +60,7 @@ class SimplifyBoneOperator(bpy.types.Operator):
         return armatures
 
 
-def select_bake_bone(armature, mode):
+def select_bake_bone(armature, mode, display_type):
     """选择用于烘焙动作的骨骼"""
     bone_modes = {
         "ARM1": PMX_BAKE_BONES_ARM1,
@@ -73,9 +83,11 @@ def select_bake_bone(armature, mode):
             is_bake_bone = pb.mmd_bone.name_j in bake_bones
             # 保留预设骨骼，隐藏其他骨骼
             set_bone_hide(pb, not is_bake_bone)
+            armature.data.bones.get(pb.name).display_type = display_type
     else:
         for pb in armature.pose.bones:
             set_bone_hide(pb, pb.mmd_bone.is_tip)
+            armature.data.bones.get(pb.name).display_type = display_type
 
     # 恢复原模式
     if original_mode != 'POSE':
