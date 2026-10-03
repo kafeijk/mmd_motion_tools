@@ -3,6 +3,7 @@ from ..operators.camera_motion_fixer_operators import FindCameraSegmentOperator,
 from ..operators.motion_fixer_operators import MotionFixerOperator, CopyRangeOperator, RemoveOuterKeyframesOperator, \
     RemoveInnerKeyframesOperator, DeselectKeyframesOperator
 from ..operators.utility_operators import ImportVmdPhysicsOperator, RemovePhysicalBoneAnimationOperator, \
+    MutePhysicalBoneAnimationOperator, UnmutePhysicalBoneAnimationOperator, \
     FindRepeatedMotionOperator, ClearRepeatedOperator, CopyKeyframesOperator, FindRepeatedMotionStrongOperator
 from ..utils import *
 
@@ -53,6 +54,12 @@ class ToolsPanel(bpy.types.Panel):
             row.operator(ImportVmdPhysicsOperator.bl_idname, text=ImportVmdPhysicsOperator.bl_label, icon='ADD')
             row.operator(RemovePhysicalBoneAnimationOperator.bl_idname,
                          text=RemovePhysicalBoneAnimationOperator.bl_label, icon='REMOVE')
+
+            row = col.row(align=True)
+            row.operator(MutePhysicalBoneAnimationOperator.bl_idname,
+                         text=MutePhysicalBoneAnimationOperator.bl_label, icon='HIDE_ON')
+            row.operator(UnmutePhysicalBoneAnimationOperator.bl_idname,
+                         text=UnmutePhysicalBoneAnimationOperator.bl_label, icon='HIDE_OFF')
 
 
 class FindRepeatedMotion_PT_Panel(bpy.types.Panel):

@@ -36,6 +36,9 @@ PMX_BAKE_BONES_ARM2 = [
 CONVERT_NAME_TO_L_REGEXP = re.compile('^(.*)左(.*)$')
 CONVERT_NAME_TO_R_REGEXP = re.compile('^(.*)右(.*)$')
 
+# 姿态骨骼数据路径前缀
+BONE_PATH_PREFIX = 'pose.bones["'
+
 
 def find_pmx_root():
     """寻找pmx对应空物体"""

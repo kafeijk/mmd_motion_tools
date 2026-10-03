@@ -110,11 +110,8 @@ class ImportVmdPhysicsOperator(bpy.types.Operator, ImportHelper):
         return {'FINISHED'}
 
 
-class RemovePhysicalBoneAnimationOperator(bpy.types.Operator):
-    bl_idname = "mmd_motion_tools.remove_physical_bone_animation"
-    bl_label = "移除物理"
-    bl_description = "移除当前模型物理骨骼的动画关键帧"
-    bl_options = {'REGISTER', 'UNDO'}
+class PhysicalBoneOperatorBase:
+    """物理骨骼动画工具基础类，统一处理 PMX 定位与前置校验"""
 
     @classmethod
     def poll(cls, context):
@@ -135,8 +132,33 @@ class RemovePhysicalBoneAnimationOperator(bpy.types.Operator):
 
         return True
 
+    def check_props(self, context, need_action=False):
+        """校验前置条件，返回 (armature, bone_names) 或 None"""
+        obj = context.active_object
+        root = find_pmx_root_with_child(obj)
+        armature = find_pmx_armature(root)
+
+        physical_bones = get_physical_bone(root)
+        if not physical_bones:
+            self.report({'ERROR'}, "当前模型不存在受物理影响骨骼!")
+            return None
+
+        if need_action and (not armature.animation_data or not armature.animation_data.action):
+            self.report({'ERROR'}, "当前骨架不存在动画!")
+            return None
+
+        return armature, set(physical_bones)
+
+
+class RemovePhysicalBoneAnimationOperator(PhysicalBoneOperatorBase, bpy.types.Operator):
+    bl_idname = "mmd_motion_tools.remove_physical_bone_animation"
+    bl_label = "移除物理"
+    bl_description = "移除当前模型物理骨骼的动画关键帧"
+    bl_options = {'REGISTER', 'UNDO'}
+
     def execute(self, context):
-        if not self.check_props(context):
+        result = self.check_props(context, need_action=True)
+        if not result:
             return {'CANCELLED'}
 
         flag = self.remove_physical_bone_animation(context)
@@ -145,24 +167,6 @@ class RemovePhysicalBoneAnimationOperator(bpy.types.Operator):
             return {'CANCELLED'}
 
         return {'FINISHED'}
-
-    def check_props(self, context):
-        obj = context.active_object
-        root = find_pmx_root_with_child(obj)
-        armature = find_pmx_armature(root)
-
-        # 获取物理骨骼
-        physical_bones = get_physical_bone(root)
-        if not physical_bones:
-            self.report({'ERROR'}, "当前模型不存在受物理影响骨骼!")
-            return False
-
-        action = armature.animation_data.action if armature.animation_data else None
-        if not action:
-            self.report({'ERROR'}, "当前骨架不存在动画!")
-            return False
-
-        return True
 
     def remove_physical_bone_animation(self, context):
         """移除指定物理骨骼的所有动画关键帧"""
@@ -180,7 +184,7 @@ class RemovePhysicalBoneAnimationOperator(bpy.types.Operator):
             data_path = fc.data_path
 
             # 只处理骨骼动画
-            if not data_path.startswith('pose.bones["'):
+            if not data_path.startswith(BONE_PATH_PREFIX):
                 continue
 
             # 获取骨骼名称
@@ -198,6 +202,96 @@ class RemovePhysicalBoneAnimationOperator(bpy.types.Operator):
         self.report({'INFO'}, f"已移除 {len(remove_bone_names)} 个物理骨骼的动画")
 
         return True
+
+
+def get_action_fcurves(armature):
+    """返回 Action 的 F-Curve 集合"""
+    animation_data = armature.animation_data
+    if not animation_data or not animation_data.action:
+        return ()
+    return animation_data.action.fcurves
+
+
+def get_physical_bone_fcurves(armature, bone_names):
+    """返回属于指定骨骼的 F-Curve 列表。bone_names 为 set，成员判断为 O(1)。"""
+    result = []
+
+    for fc in get_action_fcurves(armature):
+        data_path = fc.data_path
+
+        if not data_path.startswith(BONE_PATH_PREFIX):
+            continue
+
+        if data_path.split('"', 2)[1] in bone_names:
+            result.append(fc)
+
+    return result
+
+
+def clear_pose_transform(pose_bone):
+    """将单个骨骼的变换置为默认值"""
+    pose_bone.location = (0.0, 0.0, 0.0)
+    pose_bone.scale = (1.0, 1.0, 1.0)
+
+    if pose_bone.rotation_mode == 'QUATERNION':
+        pose_bone.rotation_quaternion = (1.0, 0.0, 0.0, 0.0)
+    else:
+        pose_bone.rotation_euler = (0.0, 0.0, 0.0)
+
+
+class MutePhysicalBoneAnimationOperator(PhysicalBoneOperatorBase, bpy.types.Operator):
+    bl_idname = "mmd_motion_tools.mute_physical_bone_animation"
+    bl_label = "禁用物理"
+    bl_description = "使物理骨骼的动画失效"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        result = self.check_props(context, need_action=True)
+        if not result:
+            return {'CANCELLED'}
+
+        armature, bone_names = result
+        fcurves = get_physical_bone_fcurves(armature, bone_names)
+
+        if not fcurves:
+            self.report({'ERROR'}, "物理骨骼没有动画曲线!")
+            return {'CANCELLED'}
+
+        # 使通道静音
+        for fc in fcurves:
+            fc.mute = True
+
+        pose_bones = armature.pose.bones
+        for name in bone_names:
+            pose_bone = pose_bones.get(name)
+            if pose_bone is not None:
+                clear_pose_transform(pose_bone)
+
+        # 只标记更新，不调用 view_layer.update()：
+        armature.update_tag()
+        return {'FINISHED'}
+
+
+class UnmutePhysicalBoneAnimationOperator(PhysicalBoneOperatorBase, bpy.types.Operator):
+    bl_idname = "mmd_motion_tools.unmute_physical_bone_animation"
+    bl_label = "恢复物理"
+    bl_description = "恢复物理骨骼的动画"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        result = self.check_props(context)
+        if not result:
+            return {'CANCELLED'}
+
+        armature, bone_names = result
+
+        for fc in get_physical_bone_fcurves(armature, bone_names):
+            if not fc.mute:
+                continue
+            fc.mute = False
+
+        armature.update_tag()
+        return {'FINISHED'}
 
 
 def get_vmd_bones(filepath):
@@ -253,7 +347,7 @@ def copy_bone_animation(src_armature, dst_armature, bone_names):
         data_path = fc.data_path
 
         # 只处理骨骼动画
-        if not data_path.startswith('pose.bones["'):
+        if not data_path.startswith(BONE_PATH_PREFIX):
             continue
 
         # 获取骨骼名称
