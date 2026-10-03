@@ -29,19 +29,19 @@ class ImportVmdPhysicsOperator(bpy.types.Operator, ImportHelper):
 
     @classmethod
     def poll(cls, context):
-        if not is_mmd_tools_enabled():
-            return False
-        obj = context.active_object
-        if obj is None:
-            return False
-        root = find_pmx_root_with_child(obj)
-        if root is None:
-            return False
-        return True
+        return context.active_object is not None
 
     def check_props(self, context):
+        if not is_mmd_tools_enabled():
+            self.report({'ERROR'}, "未启用mmd_tools插件！")
+            return False
+
         obj = context.active_object
         root = find_pmx_root_with_child(obj)
+        if root is None:
+            self.report({'ERROR'}, "请选择MMD模型!")
+            return False
+
         physical_bones = get_physical_bone(root)
         if not physical_bones:
             self.report({'ERROR'}, "当前模型不存在受物理影响骨骼!")
@@ -115,28 +115,25 @@ class PhysicalBoneOperatorBase:
 
     @classmethod
     def poll(cls, context):
-        if not is_mmd_tools_enabled():
-            return False
-
-        obj = context.active_object
-        if obj is None:
-            return False
-
-        root = find_pmx_root_with_child(obj)
-        if root is None:
-            return False
-
-        armature = find_pmx_armature(root)
-        if armature is None:
-            return False
-
-        return True
+        return context.active_object is not None
 
     def check_props(self, context, need_action=False):
         """校验前置条件，返回 (armature, bone_names) 或 None"""
+        if not is_mmd_tools_enabled():
+            self.report({'ERROR'}, "未启用mmd_tools插件！")
+            return None
+
         obj = context.active_object
+
         root = find_pmx_root_with_child(obj)
+        if root is None:
+            self.report({'ERROR'}, "请选择MMD模型！")
+            return None
+
         armature = find_pmx_armature(root)
+        if armature is None:
+            self.report({'ERROR'}, "未检测到骨架！")
+            return None
 
         physical_bones = get_physical_bone(root)
         if not physical_bones:

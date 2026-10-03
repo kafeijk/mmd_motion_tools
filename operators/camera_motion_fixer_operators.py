@@ -4,7 +4,7 @@ from ..utils import *
 class CameraBaseOperator:
     """相机工具基础类"""
 
-    def check(self, context):
+    def check_props(self, context):
         if not is_mmd_tools_enabled():
             self.report({'ERROR'}, '未启用mmd_tools插件！')
             return None
@@ -57,7 +57,7 @@ class CameraMotionFixerOperator(CameraBaseOperator, bpy.types.Operator):
     )
 
     def execute(self, context):
-        result = self.check(context)
+        result = self.check_props(context)
         if result is None:
             return {'CANCELLED'}
 
@@ -178,7 +178,7 @@ class FindCameraSegmentOperator(CameraBaseOperator, bpy.types.Operator):
     )
 
     def execute(self, context):
-        result = self.check(context)
+        result = self.check_props(context)
         if result is None:
             return {'CANCELLED'}
 

@@ -24,7 +24,7 @@ class ToolsPanel(bpy.types.Panel):
 
         row = col.row(align=True)
         split = row.split(factor=0.5, align=True)
-        if is_mmd_tools_enabled():
+        try:
             left = split.row(align=True)
             left.operator("mmd_tools.import_model", text="模型导入", icon="OUTLINER_OB_ARMATURE")
 
@@ -37,6 +37,8 @@ class ToolsPanel(bpy.types.Panel):
                 right_setup.enabled = True
             else:
                 right_setup.enabled = False
+        except Exception:
+            pass
 
         row = col.row(align=True)
         split = row.split(factor=0.5, align=True)
@@ -45,21 +47,23 @@ class ToolsPanel(bpy.types.Panel):
         right = split.row(align=True)
         right.operator(FlipPoseOperator.bl_idname, text=FlipPoseOperator.bl_label, icon="ARROW_LEFTRIGHT")
 
-        if is_mmd_tools_enabled():
+        try:
             row = col.row(align=True)
             row.operator("mmd_tools.import_vmd", text="动作导入", icon='ANIM')
             row.operator("mmd_tools.export_vmd", text="动作导出", icon='ANIM')
+        except Exception:
+            pass
 
-            row = col.row(align=True)
-            row.operator(ImportVmdPhysicsOperator.bl_idname, text=ImportVmdPhysicsOperator.bl_label, icon='ADD')
-            row.operator(RemovePhysicalBoneAnimationOperator.bl_idname,
-                         text=RemovePhysicalBoneAnimationOperator.bl_label, icon='REMOVE')
+        row = col.row(align=True)
+        row.operator(ImportVmdPhysicsOperator.bl_idname, text=ImportVmdPhysicsOperator.bl_label, icon='ADD')
+        row.operator(RemovePhysicalBoneAnimationOperator.bl_idname,
+                     text=RemovePhysicalBoneAnimationOperator.bl_label, icon='REMOVE')
 
-            row = col.row(align=True)
-            row.operator(MutePhysicalBoneAnimationOperator.bl_idname,
-                         text=MutePhysicalBoneAnimationOperator.bl_label, icon='HIDE_ON')
-            row.operator(UnmutePhysicalBoneAnimationOperator.bl_idname,
-                         text=UnmutePhysicalBoneAnimationOperator.bl_label, icon='HIDE_OFF')
+        row = col.row(align=True)
+        row.operator(MutePhysicalBoneAnimationOperator.bl_idname,
+                     text=MutePhysicalBoneAnimationOperator.bl_label, icon='HIDE_ON')
+        row.operator(UnmutePhysicalBoneAnimationOperator.bl_idname,
+                     text=UnmutePhysicalBoneAnimationOperator.bl_label, icon='HIDE_OFF')
 
 
 class FindRepeatedMotion_PT_Panel(bpy.types.Panel):
@@ -135,7 +139,7 @@ class CameraMotionFixer_PT_Panel(bpy.types.Panel):
         layout = self.layout
         layout.use_property_split = True
 
-        if is_mmd_tools_enabled():
+        try:
             mmd_camera_root = find_mmd_camera_root(obj)
             if mmd_camera_root:
                 try:
@@ -164,6 +168,8 @@ class CameraMotionFixer_PT_Panel(bpy.types.Panel):
 
             else:
                 layout.operator("mmd_tools.convert_to_mmd_camera", text="Convert")
+        except Exception as e:
+            pass
 
 
 class AboutPanel(bpy.types.Panel):
