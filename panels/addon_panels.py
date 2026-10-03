@@ -190,7 +190,7 @@ class AboutPanel(bpy.types.Panel):
         # 版本号
         col.label(
             text='版本号：' + str([addon.bl_info.get('version', (-1, -1, -1)) for addon in addon_utils.modules() if
-                                  addon.bl_info['name'] == 'mmd_motion_tools'][0]))
+                                  addon.bl_info['name'] == 'MMD Motion Tools'][0]))
         col.label(text='作者：KafeiMMD')
 
 
