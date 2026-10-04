@@ -4,7 +4,7 @@ from ..operators.motion_fixer_operators import MotionFixerOperator, CopyRangeOpe
     RemoveInnerKeyframesOperator, DeselectKeyframesOperator
 from ..operators.utility_operators import ImportVmdPhysicsOperator, RemovePhysicalBoneAnimationOperator, \
     MutePhysicalBoneAnimationOperator, UnmutePhysicalBoneAnimationOperator, \
-    FindRepeatedMotionOperator, ClearRepeatedOperator, CopyKeyframesOperator, FindRepeatedMotionStrongOperator
+    FindRepeatedMotionOperator, ClearRepeatedOperator, SyncKeyframesOperator, FindRepeatedMotionStrongOperator
 from ..utils import *
 
 
@@ -209,7 +209,7 @@ class MMD_UL_RepeatedRange(bpy.types.UIList):
         active = (item.start <= frame <= item.end or
                   item.repeat_start <= frame <= item.repeat_end)
 
-        op = button.operator(CopyKeyframesOperator.bl_idname, text="➜" if active else "→")
+        op = button.operator(SyncKeyframesOperator.bl_idname, text="➜" if active else "→")
         op.start = item.start
         op.end = item.end
         op.repeat_start = item.repeat_start

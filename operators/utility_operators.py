@@ -832,10 +832,10 @@ def dopesheet_override(context):
             space.mode = old_mode
 
 
-class CopyKeyframesOperator(MotionBaseOperator, bpy.types.Operator):
-    bl_idname = "mmd_motion_tools.copy_keyframes"
-    bl_label = "复制关键帧"
-    bl_description = "复制指定范围内的关键帧到目标范围"
+class SyncKeyframesOperator(MotionBaseOperator, bpy.types.Operator):
+    bl_idname = "mmd_motion_tools.sync_keyframes"
+    bl_label = "同步关键帧"
+    bl_description = "将指定范围的关键帧同步到目标范围"
     bl_options = {'UNDO'}
 
     start: bpy.props.IntProperty()
@@ -848,6 +848,37 @@ class CopyKeyframesOperator(MotionBaseOperator, bpy.types.Operator):
         """返回属于指定骨骼的所有 fcurve"""
         paths = tuple(f'pose.bones["{pb.name}"]' for pb in bones)
         return [fc for fc in get_action_fcurves(action) if fc.data_path.startswith(paths)]
+
+    @staticmethod
+    def _remove_range_keyframes(fcurves, start, end, exclude_start=None, exclude_end=None):
+        """
+        删除 [start, end] 范围内的关键帧，返回被删除的数量。
+
+        exclude_start / exclude_end 给定一段保护区间，落在其中的关键帧不删除：
+        源范围与目标范围可能重叠，若不排除会把待复制的关键帧一起删掉。
+        """
+        removed = 0
+        protected = exclude_start is not None and exclude_end is not None
+
+        for fc in fcurves:
+            keyframe_points = fc.keyframe_points
+
+            doomed = [
+                i for i, frame in enumerate(get_fcurve_frames(fc))
+                if start <= frame <= end
+                   and not (protected and exclude_start <= frame <= exclude_end)
+            ]
+
+            if not doomed:
+                continue
+
+            for i in reversed(doomed):
+                keyframe_points.remove(keyframe_points[i])
+
+            removed += len(doomed)
+            fc.update()
+
+        return removed
 
     @staticmethod
     def _select_keyframes(fcurves, start=None, end=None):
@@ -877,10 +908,13 @@ class CopyKeyframesOperator(MotionBaseOperator, bpy.types.Operator):
         scene = context.scene
         fcurves = self._bone_fcurves(armature.animation_data.action, bones)
 
+        # 清除目标范围内的旧关键帧，避免粘贴后残留多余的帧
+        # 与源范围重叠的部分保留，否则会把待复制的关键帧一起删掉
+        self._remove_range_keyframes(fcurves, self.repeat_start, self.repeat_end,
+                                     exclude_start=self.start, exclude_end=self.end)
+
         # 选中源范围的关键帧
-        if not self._select_keyframes(fcurves, self.start, self.end):
-            self.report({'ERROR'}, f'当前选中的骨骼在 {self.start} ~ {self.end} 范围内无关键帧')
-            return {'CANCELLED'}
+        self._select_keyframes(fcurves, self.start, self.end)
 
         # 在 Dope Sheet 中复制粘贴（没有则临时切换，结束后恢复）
         old_frame = scene.frame_current
@@ -890,14 +924,14 @@ class CopyKeyframesOperator(MotionBaseOperator, bpy.types.Operator):
                     bpy.ops.action.copy()
                     scene.frame_current = self.repeat_start
                     bpy.ops.action.paste()
-        except RuntimeError as e:
-            self.report({'ERROR'}, str(e))
-            return {'CANCELLED'}
+        except RuntimeError:
+            # 指定范围无关键帧则pass
+            pass
         finally:
             # 恢复当前帧
             scene.frame_current = old_frame
             # 清除选中状态
             self._select_keyframes(fcurves)
 
-        self.report({'INFO'}, f'已复制关键帧：{self.start}-{self.end} → {self.repeat_start}-{self.repeat_end}')
+        self.report({'INFO'}, f'已同步关键帧：{self.start}-{self.end} → {self.repeat_start}-{self.repeat_end}')
         return {'FINISHED'}
