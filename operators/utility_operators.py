@@ -854,14 +854,14 @@ class CopyKeyframesOperator(MotionBaseOperator, bpy.types.Operator):
         """
         found = False
         for fc in fcurves:
-            for kp in fc.keyframe_points:
-                sel = (
-                        start is not None
-                        and end is not None
-                        and start <= kp.co[0] <= end
-                )
-                found = found or sel
-                set_keyframe_selected(kp, sel)
+            if start is not None and end is not None:
+                count = select_fcurve_keyframes_in_range(fc, start, end)
+            else:
+                set_fcurve_keyframes_selected(fc, False)
+                count = 0
+
+            found = found or count > 0
+
         return found
 
     def execute(self, context):

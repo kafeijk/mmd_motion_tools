@@ -39,6 +39,23 @@ CONVERT_NAME_TO_R_REGEXP = re.compile('^(.*)右(.*)$')
 # 姿态骨骼数据路径前缀
 BONE_PATH_PREFIX = 'pose.bones["'
 
+
+def timeit(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        start = time.perf_counter()
+
+        result = func(*args, **kwargs)
+
+        end = time.perf_counter()
+
+        print(f"{func.__name__} 执行耗时: {end - start:.6f} 秒")
+
+        return result
+
+    return wrapper
+
+
 # -------------------------------------------------------------
 # Action / F-Curve 版本兼容层
 # -------------------------------------------------------------
@@ -383,6 +400,111 @@ def set_keyframe_selected(kp, selected):
     kp.select_right_handle = selected
 
 
+# foreach_get / foreach_set 在个别版本上不支持布尔、浮点数组属性，
+# 这些异常都表示"批量读写不可用"，统一退回逐帧读写。
+_FOREACH_ERRORS = (AttributeError, TypeError, ValueError, RuntimeError, NotImplementedError)
+
+
+def get_fcurve_frames(fcurve):
+    """
+    读取一条 F-Curve 上所有关键帧的帧号（float），一次 RNA 调用批量取回。
+    不支持批量读取时退回逐帧读取。
+    """
+    keyframe_points = fcurve.keyframe_points
+    count = len(keyframe_points)
+
+    if count == 0:
+        return []
+
+    try:
+        # co 为 (frame, value) 对，展开成一维数组后取偶数位即帧号
+        co = [0.0] * (count * 2)
+        keyframe_points.foreach_get('co', co)
+        return co[0::2]
+    except _FOREACH_ERRORS:
+        return [kp.co[0] for kp in keyframe_points]
+
+
+def set_fcurve_keyframes_selected(fcurve, selected):
+    """
+    批量设置一条 F-Curve 上所有关键帧的选中状态（True 选中 / False 取消选中）。
+    返回设置后处于选中状态的关键帧数量。
+
+    优先用 foreach_set 整条曲线一次写入（每通道 1 次 RNA 调用），
+    而不是每个关键帧 3 次；不支持批量写入时退回逐帧写入。
+    """
+    keyframe_points = fcurve.keyframe_points
+    count = len(keyframe_points)
+
+    if count == 0:
+        return 0
+
+    values = [bool(selected)] * count
+
+    try:
+        keyframe_points.foreach_set('select_control_point', values)
+        keyframe_points.foreach_set('select_left_handle', values)
+        keyframe_points.foreach_set('select_right_handle', values)
+    except _FOREACH_ERRORS:
+        for kp in keyframe_points:
+            set_keyframe_selected(kp, selected)
+
+    return count if selected else 0
+
+
+def get_fcurve_selection_flags(fcurve):
+    """
+    批量读取一条 F-Curve 上所有关键帧的选中状态，返回 bool 列表。
+    不支持批量读取时返回 None，由调用方退回逐帧读取。
+    """
+    keyframe_points = fcurve.keyframe_points
+    count = len(keyframe_points)
+
+    if count == 0:
+        return []
+
+    try:
+        control_points = [False] * count
+        left_handles = [False] * count
+        right_handles = [False] * count
+
+        keyframe_points.foreach_get('select_control_point', control_points)
+        keyframe_points.foreach_get('select_left_handle', left_handles)
+        keyframe_points.foreach_get('select_right_handle', right_handles)
+    except _FOREACH_ERRORS:
+        return None
+
+    return [
+        bool(cp or lh or rh)
+        for cp, lh, rh in zip(control_points, left_handles, right_handles)
+    ]
+
+
+def select_fcurve_keyframes_in_range(fcurve, frame_start, frame_end):
+    """
+    选中 [frame_start, frame_end] 区间内的关键帧，区间外的一律取消选中。
+    返回被选中的关键帧数量。
+    """
+    keyframe_points = fcurve.keyframe_points
+    count = len(keyframe_points)
+
+    if count == 0:
+        return 0
+
+    frames = get_fcurve_frames(fcurve)
+    values = [frame_start <= frame <= frame_end for frame in frames]
+
+    try:
+        keyframe_points.foreach_set('select_control_point', values)
+        keyframe_points.foreach_set('select_left_handle', values)
+        keyframe_points.foreach_set('select_right_handle', values)
+    except _FOREACH_ERRORS:
+        for kp, selected in zip(keyframe_points, values):
+            set_keyframe_selected(kp, selected)
+
+    return sum(values)
+
+
 def is_keyframe_selected(kp):
     """判断关键帧是否处于选中状态，三个标记中任一为真即视为选中"""
     return bool(kp.select_control_point or kp.select_left_handle or kp.select_right_handle)
@@ -603,11 +725,19 @@ def get_selected_frames(action, path, array_index=None, fcurves=None):
         if array_index is not None and fc.array_index != array_index:
             continue
 
-        for kp in fc.keyframe_points:
-            frame = int(kp.co[0])
+        # 批量读取帧号与选中标记，每条曲线各 4 次 RNA 调用，
+        # 而不是每个关键帧 4 次
+        frames = get_fcurve_frames(fc)
+        flags = get_fcurve_selection_flags(fc)
+
+        if flags is None:
+            flags = [is_keyframe_selected(kp) for kp in fc.keyframe_points]
+
+        for frame, selected in zip(frames, flags):
+            frame = int(frame)
             all_frames.add(frame)
 
-            if is_keyframe_selected(kp):
+            if selected:
                 selected_frames.add(frame)
 
     # 无选中关键帧
@@ -621,25 +751,9 @@ def get_selected_frames(action, path, array_index=None, fcurves=None):
     unselected = all_frames - selected_frames
     for frame in unselected:
         if start < frame < end:
-            return set()
+            return []
 
     return sorted(selected_frames)
-
-
-def timeit(func):
-    @functools.wraps(func)
-    def wrapper(*args, **kwargs):
-        start = time.perf_counter()
-
-        result = func(*args, **kwargs)
-
-        end = time.perf_counter()
-
-        print(f"{func.__name__} 执行耗时: {end - start:.6f} 秒")
-
-        return result
-
-    return wrapper
 
 
 def apply_transform(obj, data_path, offset, frame_start, frame_end, current_value, array_index=None, margin=0):

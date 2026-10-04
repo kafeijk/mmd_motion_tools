@@ -40,11 +40,13 @@ class MotionBaseOperator:
         action = armature.animation_data.action
         current_frame = context.scene.frame_current
 
+        fcurves = get_action_fcurves(action)
+
         frame_start = None
         frame_end = None
 
         for pb in bones:
-            frames = get_selected_frames(action, f'pose.bones["{pb.name}"]')
+            frames = get_selected_frames(action, f'pose.bones["{pb.name}"]', fcurves=fcurves)
 
             if frames is None:
                 if len(bones) == 1:
@@ -130,13 +132,15 @@ class MotionFixerOperator(MotionBaseOperator, bpy.types.Operator):
         action = armature.animation_data.action
         current_frame = context.scene.frame_current
 
+        fcurves = get_action_fcurves(action) if self.ensure_current else []
         for pb in bones:
             # 确保当前帧存在关键帧
             if self.ensure_current:
+                path = f'pose.bones["{pb.name}"]'
                 fcurve_map = {
                     (fc.data_path, fc.array_index): fc
-                    for fc in get_action_fcurves(action)
-                    if fc.data_path.startswith(f'pose.bones["{pb.name}"]')
+                    for fc in fcurves
+                    if fc.data_path.startswith(path)
                 }
 
                 if not fcurve_map:
@@ -201,13 +205,14 @@ class RemoveOuterKeyframesOperator(MotionBaseOperator, bpy.types.Operator):
         armature, bones, frame_start, frame_end = result
         action = armature.animation_data.action
 
+        fcurves = get_action_fcurves(action)
         for pb in bones:
             # 删除外侧的关键帧
             path = f'pose.bones["{pb.name}"]'
             # 避免key为array_index导致data_path被覆盖
             fcurve_map = {
                 (fc.data_path, fc.array_index): fc
-                for fc in get_action_fcurves(action)
+                for fc in fcurves
                 if fc.data_path.startswith(path)
             }
 
@@ -260,15 +265,14 @@ class CopyRangeOperator(MotionBaseOperator, bpy.types.Operator):
         frame_end = max(frames)
 
         # 设置目标骨骼的关键帧选择状态
-        for target_pb in target_bones:
-            path = f'pose.bones["{target_pb.name}"]'
-            for fc in get_action_fcurves(action):
-                if not fc.data_path.startswith(path):
-                    continue
+        paths = tuple(f'pose.bones["{pb.name}"]' for pb in target_bones)
 
-                for kp in fc.keyframe_points:
-                    frame = int(kp.co[0])
-                    set_keyframe_selected(kp, frame_start <= frame <= frame_end)
+        for fc in get_action_fcurves(action):
+            if not fc.data_path.startswith(paths):
+                continue
+
+            select_fcurve_keyframes_in_range(fc, frame_start, frame_end)
+
         return True
 
 class RemoveInnerKeyframesOperator(MotionBaseOperator, bpy.types.Operator):
@@ -297,13 +301,14 @@ class RemoveInnerKeyframesOperator(MotionBaseOperator, bpy.types.Operator):
         armature, bones, frame_start, frame_end = result
         action = armature.animation_data.action
 
+        fcurves = get_action_fcurves(action)
         for pb in bones:
             path = f'pose.bones["{pb.name}"]'
 
             # 避免 key 为 array_index 导致 data_path 被覆盖
             fcurve_map = {
                 (fc.data_path, fc.array_index): fc
-                for fc in get_action_fcurves(action)
+                for fc in fcurves
                 if fc.data_path.startswith(path)
             }
 
@@ -378,14 +383,18 @@ class DeselectKeyframesOperator(MotionBaseOperator, bpy.types.Operator):
         armature, bones = result
         action = armature.animation_data.action
 
-        for pb in armature.pose.bones:
-            path = f'pose.bones["{pb.name}"]'
+        fcurves = get_action_fcurves(action)
+        bone_names = {pb.name for pb in armature.pose.bones}
 
-            for fc in get_action_fcurves(action):
-                if not fc.data_path.startswith(path):
-                    continue
+        for fc in fcurves:
+            data_path = fc.data_path
 
-                for kp in fc.keyframe_points:
-                    set_keyframe_selected(kp, False)
+            if not data_path.startswith(BONE_PATH_PREFIX):
+                continue
+
+            if data_path.split('"', 2)[1] not in bone_names:
+                continue
+
+            set_fcurve_keyframes_selected(fc, False)
 
         return {'FINISHED'}

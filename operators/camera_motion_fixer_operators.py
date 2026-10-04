@@ -247,9 +247,7 @@ class FindCameraSegmentOperator(CameraBaseOperator, bpy.types.Operator):
             filtered_fcurves = source_fcurves
 
         for fc in filtered_fcurves:
-            for kp in fc.keyframe_points:
-                selected = start <= kp.co[0] <= end
-                set_keyframe_selected(kp, selected)
+            select_fcurve_keyframes_in_range(fc, start, end)
 
         return True
 
