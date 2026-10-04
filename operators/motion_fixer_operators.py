@@ -40,7 +40,6 @@ class MotionBaseOperator:
         action = armature.animation_data.action
         current_frame = context.scene.frame_current
 
-        # 记录所有骨骼关键帧的最大范围
         frame_start = None
         frame_end = None
 
@@ -48,22 +47,28 @@ class MotionBaseOperator:
             frames = get_selected_frames(action, f'pose.bones["{pb.name}"]')
 
             if frames is None:
-                self.report({'ERROR'}, f'请选择 {pb.name} 的关键帧!')
-                return None
+                if len(bones) == 1:
+                    self.report({'ERROR'}, f'请选择 {pb.name} 的关键帧!')
+                    return None
+                continue
 
-            if not frames:
+            if len(frames) == 0:
                 self.report({'ERROR'}, f'请选择 {pb.name} 连续的关键帧!')
                 return None
 
-            # 获取当前骨骼的关键帧范围
             current_start = min(frames)
             current_end = max(frames)
 
-            if frame_start is None or current_start < frame_start:
+            if frame_start is None:
                 frame_start = current_start
-
-            if frame_end is None or current_end > frame_end:
                 frame_end = current_end
+            else:
+                frame_start = min(frame_start, current_start)
+                frame_end = max(frame_end, current_end)
+
+        if frame_start is None:
+            self.report({'ERROR'}, f'请选择关键帧!')
+            return None
 
         if current_frame < frame_start or current_frame > frame_end:
             self.report({'ERROR'}, '当前帧不在所选关键帧范围内!')
