@@ -55,6 +55,7 @@ class MotionBaseOperator:
                     return None
                 continue
 
+            # 无论选中多少骨骼，都不允许单个骨骼存在多个关键帧范围
             if len(frames) == 0:
                 self.report({'ERROR'}, f'请选择 {pb.name} 连续的关键帧!')
                 return None
@@ -74,9 +75,19 @@ class MotionBaseOperator:
             self.report({'ERROR'}, f'请选择关键帧!')
             return None
 
+        # 当前帧至少在某个关键帧范围内
         if pairs and not any(cs <= current_frame <= ce for cs, ce in pairs):
             self.report({'ERROR'}, '当前帧不在所选关键帧范围内！')
             return None
+
+        # 关键帧范围之间必须是相交的
+        if pairs:
+            max_pair = max(pairs, key=lambda pair: pair[1] - pair[0])
+
+            for cs, ce in pairs:
+                if ce < max_pair[0] or cs > max_pair[1]:
+                    self.report({'ERROR'}, f'请同步选择范围后重试!')
+                    return None
 
         if current_frame < frame_start or current_frame > frame_end:
             self.report({'ERROR'}, '当前帧不在所选关键帧范围内!')
@@ -228,10 +239,10 @@ class RemoveOuterKeyframesOperator(MotionBaseOperator, bpy.types.Operator):
         return True
 
 
-class CopyRangeOperator(MotionBaseOperator, bpy.types.Operator):
-    bl_idname = "mmd_motion_tools.copy_range"
-    bl_label = "复制范围选择"
-    bl_description = "将选中的帧范围从活动骨骼复制到所有选定骨骼"
+class SyncRangeOperator(MotionBaseOperator, bpy.types.Operator):
+    bl_idname = "mmd_motion_tools.sync_range"
+    bl_label = "同步范围选择"
+    bl_description = "将选中的帧范围从活动骨骼同步到所有选定骨骼"
     bl_options = {'REGISTER', 'UNDO'}
 
     def execute(self, context):
@@ -239,12 +250,12 @@ class CopyRangeOperator(MotionBaseOperator, bpy.types.Operator):
         if not result:
             return {'CANCELLED'}
 
-        if not self.copy_range(context, result):
+        if not self.sync_range(context, result):
             return {'CANCELLED'}
 
         return {'FINISHED'}
 
-    def copy_range(self, context, result):
+    def sync_range(self, context, result):
         # 获取骨骼信息
         armature, bones = result
         active_pb = armature.pose.bones.get(armature.data.bones.active.name) if armature.data.bones.active else None
