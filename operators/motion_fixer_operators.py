@@ -4,18 +4,18 @@ from ..utils import *
 class MotionBaseOperator:
     """动作工具基础类"""
 
-    def check_basic(self, context, count=None):
+    def check_basic(self, context, check_select=True, count=None):
         armature = self.get_armature(context)
         if not armature:
             return None
 
         bones = get_selected_bones(armature)
 
-        if not bones:
+        if check_select and not bones:
             self.report({'ERROR'}, '请选择骨骼!')
             return None
 
-        if count and len(bones) != count:
+        if check_select and count and len(bones) != count:
             self.report({'ERROR'}, f'请选择{count}个骨骼!')
             return None
 
@@ -275,6 +275,7 @@ class CopyRangeOperator(MotionBaseOperator, bpy.types.Operator):
 
         return True
 
+
 class RemoveInnerKeyframesOperator(MotionBaseOperator, bpy.types.Operator):
     bl_idname = "mmd_motion_tools.remove_inner_keyframe"
     bl_label = "删除内侧帧"
@@ -376,11 +377,11 @@ class DeselectKeyframesOperator(MotionBaseOperator, bpy.types.Operator):
     bl_options = {'REGISTER', 'UNDO'}
 
     def execute(self, context):
-        result = self.check_basic(context)
+        result = self.check_basic(context, check_select=False)
         if not result:
             return {'CANCELLED'}
 
-        armature, bones = result
+        armature, _ = result
         action = armature.animation_data.action
 
         fcurves = get_action_fcurves(action)
