@@ -691,7 +691,14 @@ class FindRepeatedMotionBaseOperator(MotionBaseOperator):
             if not contained:
                 filtered.append(curr)
 
-        filtered = [(x["start"], x["end"], x["repeat_start"], x["repeat_end"]) for x in filtered]
+        # 两段重复的动作间，repeat_start - start必须大于最小连续重复帧数
+        # 如果是循环类动作，应调整threshold来从小范围向大范围寻找，而不是大范围内还包含小范围
+        threshold = self.threshold
+        filtered = [
+            (x["start"], x["end"], x["repeat_start"], x["repeat_end"])
+            for x in filtered
+            if x["repeat_start"] - x["start"] > threshold
+        ]
         # 先按照 start 升序，如果 start 一致，则按照连续帧数量排序
         filtered.sort(key=lambda x: (x[0], x[1] - x[0]))
 
