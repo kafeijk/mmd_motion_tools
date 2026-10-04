@@ -103,6 +103,7 @@ class MotionFixerOperator(MotionBaseOperator, bpy.types.Operator):
         min=0,
     )
 
+    # ensure_current 在 Blender 5.0 中表现为虽然已注册，但获取到的值仍为调整前的值；Blender 4.5 和 5.2 中均正常。
     ensure_current: bpy.props.BoolProperty(
         name="注册当前帧",
         description="注册当前关键帧，保持修改前后姿势一致。\n当选中多个骨骼且当前帧在所选帧的边界上时，可能会因为缺帧导致修改前后姿势不一致，开启此选项可自动注册关键帧，保持姿势一致。",
