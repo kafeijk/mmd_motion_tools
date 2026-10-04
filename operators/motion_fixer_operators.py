@@ -324,14 +324,12 @@ class RemoveInnerKeyframesOperator(MotionBaseOperator, bpy.types.Operator):
             if not fcurve_map:
                 continue
 
-            fcurves = fcurve_map.values()
-
             # 确保范围两侧存在关键帧
             if self.ensure_boundary:
-                ensure_keyframes(fcurves, frame_start, frame_end)
+                ensure_keyframes(fcurve_map.values(), frame_start, frame_end)
 
             # 删除范围内部的关键帧
-            remove_inner_keys(fcurves, frame_start, frame_end)
+            remove_inner_keys(fcurve_map.values(), frame_start, frame_end)
 
         return True
 
