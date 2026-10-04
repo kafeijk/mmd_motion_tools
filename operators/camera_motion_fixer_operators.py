@@ -172,7 +172,7 @@ class CameraMotionFixerOperator(CameraBaseOperator, bpy.types.Operator):
 class FindCameraSegmentOperator(CameraBaseOperator, bpy.types.Operator):
     bl_idname = "mmd_motion_tools.find_camera_segment"
     bl_label = "查找片段"
-    bl_description = "查找片段"
+    bl_description = "根据当前帧查找相机动画中的一段连续镜头"
     bl_options = {'REGISTER', 'UNDO'}
 
     clean: bpy.props.BoolProperty(
@@ -200,7 +200,7 @@ class FindCameraSegmentOperator(CameraBaseOperator, bpy.types.Operator):
         # 获取筛选后的fcurves
         filtered_fcurves = []
         for fc in get_action_fcurves(mmd_camera.animation_data.action):
-            if fc.data_path not in ["location", "rotation_quaternion", "mmd_camera.angle"]:
+            if fc.data_path not in ["location", "rotation_euler", "mmd_camera.angle", "mmd_camera.is_perspective"]:
                 continue
             filtered_fcurves.append(fc)
         for fc in get_action_fcurves(camera.animation_data.action):
