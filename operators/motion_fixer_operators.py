@@ -129,7 +129,7 @@ class MotionFixerOperator(MotionBaseOperator, bpy.types.Operator):
             if self.ensure_current:
                 fcurve_map = {
                     (fc.data_path, fc.array_index): fc
-                    for fc in action.fcurves
+                    for fc in get_action_fcurves(action)
                     if fc.data_path.startswith(f'pose.bones["{pb.name}"]')
                 }
 
@@ -201,7 +201,7 @@ class RemoveOuterKeyframesOperator(MotionBaseOperator, bpy.types.Operator):
             # 避免key为array_index导致data_path被覆盖
             fcurve_map = {
                 (fc.data_path, fc.array_index): fc
-                for fc in action.fcurves
+                for fc in get_action_fcurves(action)
                 if fc.data_path.startswith(path)
             }
 
@@ -256,7 +256,7 @@ class CopyRangeOperator(MotionBaseOperator, bpy.types.Operator):
         # 设置目标骨骼的关键帧选择状态
         for target_pb in target_bones:
             path = f'pose.bones["{target_pb.name}"]'
-            for fc in action.fcurves:
+            for fc in get_action_fcurves(action):
                 if not fc.data_path.startswith(path):
                     continue
 
@@ -297,7 +297,7 @@ class RemoveInnerKeyframesOperator(MotionBaseOperator, bpy.types.Operator):
             # 避免 key 为 array_index 导致 data_path 被覆盖
             fcurve_map = {
                 (fc.data_path, fc.array_index): fc
-                for fc in action.fcurves
+                for fc in get_action_fcurves(action)
                 if fc.data_path.startswith(path)
             }
 
@@ -375,7 +375,7 @@ class DeselectKeyframesOperator(MotionBaseOperator, bpy.types.Operator):
         for pb in armature.pose.bones:
             path = f'pose.bones["{pb.name}"]'
 
-            for fc in action.fcurves:
+            for fc in get_action_fcurves(action):
                 if not fc.data_path.startswith(path):
                     continue
 

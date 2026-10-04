@@ -39,6 +39,219 @@ CONVERT_NAME_TO_R_REGEXP = re.compile('^(.*)右(.*)$')
 # 姿态骨骼数据路径前缀
 BONE_PATH_PREFIX = 'pose.bones["'
 
+# -------------------------------------------------------------
+# Action / F-Curve 版本兼容层
+# -------------------------------------------------------------
+# Blender 5.0 起 Action 改为 Slotted Action，原生移除了 Action.fcurves，
+# F-Curve 分散存放在 action.layers[].strips[].channelbag(slot).fcurves 中。
+# 本插件同时支持 3.2 ~ 5.x，因此所有涉及 Action.fcurves 的地方都改用
+# get_action_fcurves / new_action_fcurve / remove_action_fcurves 三个入口。
+#
+# 版本判定说明：不能用 hasattr(bpy.types.Action, "fcurves") 探测——
+# 在 5.x 上类级探测会返回 False，但 mmd_tools 的 compat 层会在实例上
+# 注入 fcurves 属性，导致判定结果与实际可用性不一致。因此这里统一
+# 以"实例 + try/except"为准，并优先走 channelbag 官方路径。
+
+# Blender 5.0 引入 Slotted Action
+SLOTTED_ACTION_VERSION = (5, 0, 0)
+
+
+def _is_slotted_action(action):
+    """判断 Action 是否为5.0+ 的 Slotted Action（以实例属性为准）"""
+    return bpy.app.version >= SLOTTED_ACTION_VERSION
+
+
+def iter_action_fcurves(action):
+    """
+    遍历 Action 的全部 F-Curve，跨版本通用。
+
+    Blender 3.2 ~ 4.x：直接使用 action.fcurves。
+    Blender 5.0+：遍历 layers -> strips -> slots -> channelbag，
+                   按 (data_path, array_index) 去重后返回。
+    """
+    if action is None:
+        return
+
+    # 5.0+ 优先走官方 channelbag 路径
+    if _is_slotted_action(action):
+        found = False
+        for layer in action.layers:
+            for strip in layer.strips:
+                # channelbag() 需要 ActionSlot 对象，不能用 handle（int）
+                for slot in action.slots:
+                    try:
+                        channelbag = strip.channelbag(slot)
+                    except (AttributeError, RuntimeError, TypeError):
+                        continue
+
+                    if channelbag is None:
+                        continue
+
+                    found = True
+                    for fcurve in channelbag.fcurves:
+                        yield fcurve
+        if found:
+            return
+
+    # 3.x / 4.x 原生路径；5.x 上若 mmd_tools 注入过 fcurves 也能走这里
+    try:
+        legacy_fcurves = action.fcurves
+    except AttributeError:
+        return
+
+    for fcurve in legacy_fcurves:
+        yield fcurve
+
+
+def get_action_fcurves(action):
+    """
+    返回 Action 的 F-Curve 列表，跨版本通用。
+
+    action 可以是 Action 对象，也可以是带 animation_data 的对象
+    （骨架、相机、Empty 等）；传入对象时自动取其 animation_data.action。
+    无动画数据时返回空列表。
+
+    按 (data_path, array_index) 去重，避免同一曲线被重复返回。
+    """
+    if action is None:
+        return []
+
+    # 传入的是对象而非 Action 时，取出其 Action
+    if not isinstance(action, bpy.types.Action):
+        animation_data = getattr(action, "animation_data", None)
+        action = animation_data.action if animation_data else None
+
+        if action is None:
+            return []
+
+    result = []
+    seen = set()
+
+    for fcurve in iter_action_fcurves(action):
+        key = (fcurve.data_path, fcurve.array_index)
+
+        if key in seen:
+            continue
+
+        seen.add(key)
+        result.append(fcurve)
+
+    return result
+
+
+def new_action_fcurve(action, data_path, array_index=0):
+    """
+    在 Action 中新建 F-Curve，跨版本通用。成功返回 F-Curve，失败返回 None。
+
+    Blender 3.x / 4.x：走 action.fcurves.new()。
+    Blender 5.0+：Action 原生移除了 fcurves 集合，必须落到具体的
+                   channelbag 上，通过 channelbag.fcurves.new() 新建。
+
+    注意：5.x 上新创建的 Action 可能还没有 layer/strip/slot，
+    此时本函数返回 None，由调用方决定是否需要先初始化 Action。
+    """
+    if action is None:
+        return None
+
+    try:
+        return action.fcurves.new(data_path=data_path, index=array_index)
+    except AttributeError:
+        pass
+
+    # 4.2 及更早没有 layers/slots
+    if not hasattr(action, "layers"):
+        return None
+
+    for layer in action.layers:
+        for strip in layer.strips:
+            for slot in action.slots:
+                try:
+                    channelbag = strip.channelbag(slot)
+                except (AttributeError, RuntimeError, TypeError):
+                    continue
+
+                if channelbag is None:
+                    continue
+
+                return channelbag.fcurves.new(data_path=data_path,
+                                              index=array_index)
+
+    return None
+
+
+def remove_action_fcurves(action, fcurves):
+    """
+    从 Action 中删除指定的 F-Curve，跨版本通用。返回成功删除的数量。
+
+    Blender 3.x / 4.x：走 action.fcurves.remove()。
+    Blender 5.0+：F-Curve 归属于具体 channelbag，
+                   需逐个定位其所属 channelbag 后再删除。
+    """
+    if action is None or not fcurves:
+        return 0
+
+    # 按键去重，避免同一条曲线被重复处理
+    remaining = {}
+
+    for fcurve in fcurves:
+        remaining.setdefault((fcurve.data_path, fcurve.array_index), fcurve)
+
+    if not remaining:
+        return 0
+
+    removed = 0
+
+    # 3.x / 4.x 的原生路径
+    try:
+        legacy_fcurves = action.fcurves
+    except AttributeError:
+        legacy_fcurves = None
+
+    if legacy_fcurves is not None:
+        doomed = [
+            c for c in legacy_fcurves
+            if (c.data_path, c.array_index) in remaining
+        ]
+
+        for target in doomed:
+            try:
+                legacy_fcurves.remove(target)
+                removed += 1
+                remaining.pop((target.data_path, target.array_index), None)
+            except (RuntimeError, ReferenceError, ValueError):
+                continue
+
+    # 5.0+ 原生路径：定位每条曲线所属的 channelbag 后删除。
+    # 若 legacy 路径已全部处理完，remaining 为空，循环会自然跳过。
+    # 4.2 及更早没有 layers/slots 属性，直接跳过。
+    if remaining and hasattr(action, "layers"):
+        for layer in action.layers:
+            for strip in layer.strips:
+                for slot in action.slots:
+                    try:
+                        channelbag = strip.channelbag(slot)
+                    except (AttributeError, RuntimeError, TypeError):
+                        continue
+
+                    if channelbag is None:
+                        continue
+
+                    doomed = [
+                        c for c in channelbag.fcurves
+                        if (c.data_path, c.array_index) in remaining
+                    ]
+
+                    for target in doomed:
+                        try:
+                            channelbag.fcurves.remove(target)
+                            removed += 1
+                            remaining.pop(
+                                (target.data_path, target.array_index), None)
+                        except (RuntimeError, ReferenceError, ValueError):
+                            continue
+
+    return removed
+
 
 def find_pmx_root():
     """寻找pmx对应空物体"""
@@ -244,7 +457,7 @@ def get_camera_value(obj, data_path, frame, array_index=None):
     if not animation_data or not animation_data.action:
         return None
 
-    for fcurve in animation_data.action.fcurves:
+    for fcurve in get_action_fcurves(animation_data.action):
         if fcurve.data_path != data_path:
             continue
 
@@ -274,7 +487,7 @@ def get_camera_euler(obj, data_path, frame):
     values = [0.0, 0.0, 0.0]
     has_keyframe = False
 
-    for fcurve in action.fcurves:
+    for fcurve in get_action_fcurves(action):
         if fcurve.data_path != data_path:
             continue
 
@@ -308,7 +521,7 @@ def get_quaternion(armature, bone_name, frame):
     has_keyframe = False
     data_path = f'pose.bones["{bone_name}"].rotation_quaternion'
 
-    for fcurve in action.fcurves:
+    for fcurve in get_action_fcurves(action):
         if fcurve.data_path == data_path:
             if fcurve.keyframe_points:
                 has_keyframe = True
@@ -339,7 +552,7 @@ def get_location(obj, data_path, frame, default=None):
 
     found = False
 
-    for fc in animation_data.action.fcurves:
+    for fc in get_action_fcurves(animation_data.action):
         if fc.data_path != data_path:
             continue
         if fc.array_index >= 3:
@@ -369,13 +582,22 @@ def calculate_quaternion_offset(q_start, q_target):
     return q_target @ q_start.inverted()
 
 
-def get_selected_frames(action, path, array_index=None):
-    """获取指定骨骼选中的关键帧范围"""
+def get_selected_frames(action, path, array_index=None, fcurves=None):
+    """
+    获取指定骨骼选中的关键帧范围。
+
+      None  —— 该 path 下没有任何关键帧
+      []    —— 有关键帧但选中不连续
+      list  —— 连续选中的帧号列表
+    """
 
     selected_frames = set()
     all_frames = set()
 
-    for fc in action.fcurves:
+    if fcurves is None:
+        fcurves = get_action_fcurves(action)
+
+    for fc in fcurves:
         if not fc.data_path.startswith(path):
             continue
         if array_index is not None and fc.array_index != array_index:
@@ -430,7 +652,7 @@ def apply_transform(obj, data_path, offset, frame_start, frame_end, current_valu
 
     fcurve_map = {}
 
-    for fc in action.fcurves:
+    for fc in get_action_fcurves(action):
         if fc.data_path == data_path:
             # 对应单值，无论array_index传入何值，fcurve_map的array_index默认为0，避免处理逻辑不一致
             if array_index is not None and fc.array_index == array_index:

@@ -177,7 +177,7 @@ class RemovePhysicalBoneAnimationOperator(PhysicalBoneOperatorBase, bpy.types.Op
 
         remove_fcurves = []
         remove_bone_names = set()
-        for fc in action.fcurves:
+        for fc in get_action_fcurves(action):
             data_path = fc.data_path
 
             # 只处理骨骼动画
@@ -191,22 +191,13 @@ class RemovePhysicalBoneAnimationOperator(PhysicalBoneOperatorBase, bpy.types.Op
                 remove_fcurves.append(fc)
                 remove_bone_names.add(bone_name)
 
-        for fc in remove_fcurves:
-            action.fcurves.remove(fc)
+        remove_action_fcurves(action, remove_fcurves)
 
         set_physical_bone_ik(armature, physical_bones, enabled=True)
 
         self.report({'INFO'}, f"已移除 {len(remove_bone_names)} 个物理骨骼的动画")
 
         return True
-
-
-def get_action_fcurves(armature):
-    """返回 Action 的 F-Curve 集合"""
-    animation_data = armature.animation_data
-    if not animation_data or not animation_data.action:
-        return ()
-    return animation_data.action.fcurves
 
 
 def get_physical_bone_fcurves(armature, bone_names):
@@ -337,10 +328,10 @@ def copy_bone_animation(src_armature, dst_armature, bone_names):
     # 缓存目标 F-Curve
     dst_fcurves = {
         (fc.data_path, fc.array_index): fc
-        for fc in dst_action.fcurves
+        for fc in get_action_fcurves(dst_action)
     }
 
-    for fc in src_action.fcurves:
+    for fc in get_action_fcurves(src_action):
         data_path = fc.data_path
 
         # 只处理骨骼动画
@@ -357,10 +348,15 @@ def copy_bone_animation(src_armature, dst_armature, bone_names):
         new_fc = dst_fcurves.get(key)
 
         if new_fc is None:
-            new_fc = dst_action.fcurves.new(
+            new_fc = new_action_fcurve(
+                dst_action,
                 data_path=data_path,
-                index=fc.array_index,
+                array_index=fc.array_index,
             )
+
+            if new_fc is None:
+                continue
+
             dst_fcurves[key] = new_fc
         else:
             # 完整覆盖目标 F-Curve
@@ -439,9 +435,9 @@ def set_physical_bone_ik(armature, physical_bones, enabled=False):
             for ik_name in ik_names
         }
 
-        for fc in list(action.fcurves):
+        for fc in get_action_fcurves(action):
             if fc.data_path in data_paths:
-                action.fcurves.remove(fc)
+                remove_action_fcurves(action, [fc])
 
     # 关闭 IK
     for ik_name in ik_names:
@@ -531,7 +527,7 @@ class FindRepeatedMotionBaseOperator(MotionBaseOperator):
         for pb in bones:
             path = f'pose.bones["{pb.name}"]'
 
-            for fc in action.fcurves:
+            for fc in get_action_fcurves(action):
                 if not fc.data_path.startswith(path):
                     continue
 
@@ -546,7 +542,7 @@ class FindRepeatedMotionBaseOperator(MotionBaseOperator):
         valid_props = {"rotation_quaternion", "location", }
 
         result = {}
-        for fc in action.fcurves:
+        for fc in get_action_fcurves(action):
             match = pattern.match(fc.data_path)
             if not match:
                 continue
@@ -847,7 +843,7 @@ class CopyKeyframesOperator(MotionBaseOperator, bpy.types.Operator):
     def _bone_fcurves(action, bones):
         """返回属于指定骨骼的所有 fcurve"""
         paths = tuple(f'pose.bones["{pb.name}"]' for pb in bones)
-        return [fc for fc in action.fcurves if fc.data_path.startswith(paths)]
+        return [fc for fc in get_action_fcurves(action) if fc.data_path.startswith(paths)]
 
     @staticmethod
     def _select_keyframes(fcurves, start=None, end=None):

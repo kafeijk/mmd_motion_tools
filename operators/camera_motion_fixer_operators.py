@@ -75,9 +75,12 @@ class CameraMotionFixerOperator(CameraBaseOperator, bpy.types.Operator):
         distance_fcurves = []
         frames = set()
 
-        def collect_fcurves(action, data_path, target_list, array_index=None):
+        def collect_fcurves(action, data_path, target_list, array_index=None, fcurves=None):
             """收集指定类型的FCurve并获取选中帧"""
-            fs = get_selected_frames(action, data_path, array_index=array_index)
+            if fcurves is None:
+                fcurves = get_action_fcurves(action)
+
+            fs = get_selected_frames(action, data_path, array_index=array_index, fcurves=fcurves)
             # 单个 data_path 未选中无需处理，直接返回，统一在后续检查是否存在选中项
             if fs is None:
                 return True
@@ -85,7 +88,6 @@ class CameraMotionFixerOperator(CameraBaseOperator, bpy.types.Operator):
                 self.report({'ERROR'}, '请选择连续的关键帧!')
                 return False
 
-            fcurves = action.fcurves
             for fc in fcurves:
                 if fc.data_path != data_path:
                     continue
@@ -96,13 +98,15 @@ class CameraMotionFixerOperator(CameraBaseOperator, bpy.types.Operator):
             return True
 
         action = mmd_camera.animation_data.action
-        if not collect_fcurves(action, "location", loc_fcurves):
+        fcurves = get_action_fcurves(action)
+
+        if not collect_fcurves(action, "location", loc_fcurves, fcurves=fcurves):
             return False
 
-        if not collect_fcurves(action, "rotation_euler", rot_fcurves):
+        if not collect_fcurves(action, "rotation_euler", rot_fcurves, fcurves=fcurves):
             return False
 
-        if not collect_fcurves(action, "mmd_camera.angle", angle_fcurves):
+        if not collect_fcurves(action, "mmd_camera.angle", angle_fcurves, fcurves=fcurves):
             return False
 
         camera_action = camera.animation_data.action
@@ -195,13 +199,11 @@ class FindCameraSegmentOperator(CameraBaseOperator, bpy.types.Operator):
 
         # 获取筛选后的fcurves
         filtered_fcurves = []
-        fcurves = mmd_camera.animation_data.action.fcurves
-        for fc in fcurves:
+        for fc in get_action_fcurves(mmd_camera.animation_data.action):
             if fc.data_path not in ["location", "rotation_quaternion", "mmd_camera.angle"]:
                 continue
             filtered_fcurves.append(fc)
-        fcurves = camera.animation_data.action.fcurves
-        for fc in fcurves:
+        for fc in get_action_fcurves(camera.animation_data.action):
             if fc.data_path != "location":
                 continue
             if fc.array_index != 1:
