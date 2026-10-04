@@ -100,7 +100,7 @@ class MotionFixerOperator(MotionBaseOperator, bpy.types.Operator):
 
     ensure_current: bpy.props.BoolProperty(
         name="注册当前帧",
-        description="注册当前关键帧，保持修改前后姿势一致",  # 选中多个骨骼且当前帧在边界上时，可能会因为缺帧导致修改前后姿势不一致
+        description="注册当前关键帧，保持修改前后姿势一致。\n当选中多个骨骼且当前帧在所选帧的边界上时，可能会因为缺帧导致修改前后姿势不一致，开启此选项可自动注册关键帧，保持姿势一致。",
         default=False,
     )
 
