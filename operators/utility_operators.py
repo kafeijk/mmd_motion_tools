@@ -189,6 +189,15 @@ class RemovePhysicalBoneAnimationOperator(PhysicalBoneOperatorBase, bpy.types.Op
 
         set_physical_bone_ik(armature, physical_bones, enabled=True)
 
+        pose_bones = armature.pose.bones
+        for name in physical_bones:
+            pose_bone = pose_bones.get(name)
+            if pose_bone is not None:
+                clear_pose_transform(pose_bone)
+
+        # 只标记更新，不调用 view_layer.update()：
+        armature.update_tag()
+
         self.report({'INFO'}, f"已移除 {len(remove_bone_names)} 个物理骨骼的动画")
 
         return True
