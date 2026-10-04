@@ -89,13 +89,7 @@ class ImportVmdPhysicsOperator(bpy.types.Operator, ImportHelper):
         select_and_activate(copied_armature)
 
         # 导入动作
-        bpy.ops.mmd_tools.import_vmd(
-            'EXEC_DEFAULT',
-            filepath=self.filepath,
-            scale=self.scale,
-            margin=self.margin,
-            create_new_action=True,
-        )
+        import_vmd(filepath=self.filepath, scale=self.scale, margin=self.margin)
 
         # 拷贝物理数据
         physical_bones = get_physical_bone(root)

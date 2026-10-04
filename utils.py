@@ -1,4 +1,5 @@
 import functools
+import os
 import re
 import time
 
@@ -942,3 +943,20 @@ def copy_obj(obj, col=None):
         col = obj.users_collection[0]
     col.objects.link(new_obj)
     return new_obj
+
+
+def import_vmd(filepath, scale=0.08, margin=0):
+    filepath = bpy.path.abspath(filepath)
+
+    kwargs = {
+        "filepath": filepath,
+        "directory": os.path.dirname(filepath),
+        "files": [{"name": os.path.basename(filepath)}],
+        "scale": scale,
+        "margin": margin,
+    }
+
+    if bpy.app.version >= (4, 2, 0):
+        kwargs["create_new_action"] = True
+
+    return bpy.ops.mmd_tools.import_vmd('EXEC_DEFAULT', **kwargs)
