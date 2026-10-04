@@ -45,6 +45,7 @@ class MotionBaseOperator:
         frame_start = None
         frame_end = None
 
+        pairs = []
         for pb in bones:
             frames = get_selected_frames(action, f'pose.bones["{pb.name}"]', fcurves=fcurves)
 
@@ -67,9 +68,14 @@ class MotionBaseOperator:
             else:
                 frame_start = min(frame_start, current_start)
                 frame_end = max(frame_end, current_end)
+            pairs.append((current_start, current_end))
 
         if frame_start is None:
             self.report({'ERROR'}, f'请选择关键帧!')
+            return None
+
+        if pairs and not any(cs <= current_frame <= ce for cs, ce in pairs):
+            self.report({'ERROR'}, '当前帧不在所选关键帧范围内！')
             return None
 
         if current_frame < frame_start or current_frame > frame_end:
