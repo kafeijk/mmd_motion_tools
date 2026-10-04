@@ -591,7 +591,7 @@ class FindRepeatedMotionBaseOperator(MotionBaseOperator):
                 continue
 
             # 避免浮点误差
-            if x !=0 and y != 0 and abs(x-y) < 1e-6:
+            if x != 0 and y != 0 and abs(x - y) < 1e-6:
                 return True
 
             if abs(x - y) / abs(x) > (self.error / 100):
