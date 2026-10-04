@@ -83,11 +83,11 @@ def select_bake_bone(armature, mode, display_type):
             is_bake_bone = pb.mmd_bone.name_j in bake_bones
             # 保留预设骨骼，隐藏其他骨骼
             set_bone_hide(pb, not is_bake_bone)
-            armature.data.bones.get(pb.name).display_type = display_type
+            armature.data.display_type = display_type
     else:
         for pb in armature.pose.bones:
             set_bone_hide(pb, pb.mmd_bone.is_tip)
-            armature.data.bones.get(pb.name).display_type = display_type
+            armature.data.display_type = display_type
 
     # 恢复原模式
     if original_mode != 'POSE':
