@@ -398,4 +398,6 @@ class DeselectKeyframesOperator(MotionBaseOperator, bpy.types.Operator):
 
             set_fcurve_keyframes_selected(fc, False)
 
+        # 刷新场景，立即显示结果
+        context.scene.frame_current = context.scene.frame_current
         return {'FINISHED'}
