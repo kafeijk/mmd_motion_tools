@@ -291,7 +291,7 @@ class SyncRangeOperator(MotionBaseOperator, bpy.types.Operator):
             select_fcurve_keyframes_in_range(fc, frame_start, frame_end)
 
         # 刷新场景，立即显示结果
-        context.scene.frame_current = context.scene.frame_current
+        context.scene.frame_set(context.scene.frame_current)
         return True
 
 
@@ -384,7 +384,7 @@ def remove_inner_keys(fcurves, frame_start, frame_end):
         smooth_key_transition(fc, [(frame_start, frame_end)])
 
     # 刷新场景以更新视图
-    bpy.context.scene.frame_current = bpy.context.scene.frame_current
+    bpy.context.scene.frame_set(bpy.context.scene.frame_current)
 
 
 class DeselectKeyframesOperator(MotionBaseOperator, bpy.types.Operator):
@@ -416,5 +416,5 @@ class DeselectKeyframesOperator(MotionBaseOperator, bpy.types.Operator):
             set_fcurve_keyframes_selected(fc, False)
 
         # 刷新场景，立即显示结果
-        context.scene.frame_current = context.scene.frame_current
+        context.scene.frame_set(context.scene.frame_current)
         return {'FINISHED'}

@@ -1092,7 +1092,7 @@ def remove_margin_keys(fcurves, frame_start, frame_end, margin):
         )
 
     # 刷新场景以更新视图
-    bpy.context.scene.frame_current = bpy.context.scene.frame_current
+    bpy.context.scene.frame_set(bpy.context.scene.frame_current)
 
 
 def smooth_key_transition(fc, frame_pairs):
