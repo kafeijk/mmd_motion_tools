@@ -1,4 +1,5 @@
 import functools
+import importlib
 import os
 import re
 import time
@@ -269,6 +270,224 @@ def remove_action_fcurves(action, fcurves):
                             continue
 
     return removed
+
+
+# -------------------------------------------------------------
+# mmd_tools 版本兼容层
+# -------------------------------------------------------------
+# mmd_tools 在不同 Blender 版本下的包名不同（与 is_mmd_tools_enabled 保持一致）：
+#   Blender 3.x:  mmd_tools
+#   Blender 4.2:  bl_ext.user_default.mmd_tools
+#   Blender 4.3+: bl_ext.blender_org.mmd_tools
+#
+# 除了包名，VMD 导入在 3.6（源码版本 ~0.x/3.x）与 4.2+（4.5.14）之间还有以下实质差异：
+#
+# 1. VMDImporter 构造参数改名/新增
+#    3.6  : use_NLA, convert_mmd_lamp
+#    4.2+ : use_nla, convert_mmd_light, detect_camera_changes, detect_light_changes
+#    ——两者共有的是 filepath / scale / bone_mapper / use_pose_mode / frame_margin，
+#      兼容层只传这些共有参数，不写版本号分支。
+#
+# 2. __assignToArmature / __assign_action 的写入方式完全不同（最关键）
+#    3.6  : action = bpy.data.actions.new(...)          ——总是新建 Action 并挂到骨架
+#    4.2+ : action = __get_or_create_action(...)        ——骨架上已有 Action 时直接复用，
+#           且 __assign_action 在 target.animation_data.action 存在时直接 return，
+#           于是关键帧被写进“调用前就存在的那个 Action”。
+#    ——用结构探测（有没有 _VMDImporter__get_or_create_action）区分，而不是硬编码版本号。
+#
+# 3. 帧号公式不同（属于各版本官方行为，这里刻意保留而不做跨版本归一化）
+#    3.6  : frame = key.frame_number + frame_margin + 1
+#    4.2+ : frame = key.frame_number + frame_start + frame_margin
+#                   （frame_start = 当前帧，且 frame_margin 仅在当前帧为 0/1 时生效）
+#    ——物理帧必须和同一台 Blender 上导入的动作帧对齐，所以沿用本机 mmd_tools 的算法。
+#
+# 4. 数据结构：core/vmd 中的骨骼动画在两版都是 BoneAnimation(defaultdict)、
+#    IK 开关都是 PropertyAnimation(list)、容器都是 File.load(filepath=...)；
+#    唯一改名的是 3.6 的 lampAnimation → 4.2+ 的 lightAnimation（物理导入不使用）。
+
+MMD_TOOLS_PACKAGE_NAMES = (
+    'mmd_tools',  # Blender 3.x 传统插件
+    'bl_ext.blender_org.mmd_tools',  # Blender 4.3+ 扩展
+    'bl_ext.user_default.mmd_tools',  # Blender 4.2 过渡期
+)
+
+
+class MmdToolsModules:
+    """mmd_tools 中读取/转换 VMD 所需的模块集合，跨版本统一入口"""
+
+    __slots__ = ('package_name', 'vmd', 'VMDImporter', 'makePmxBoneMap')
+
+    def __init__(self, package_name, vmd_module, importer_class, bone_mapper):
+        self.package_name = package_name
+        self.vmd = vmd_module
+        self.VMDImporter = importer_class
+        self.makePmxBoneMap = bone_mapper
+
+    @property
+    def writes_existing_action(self):
+        """
+        True 表示 VMDImporter 会直接把关键帧写进骨架上已有的 Action（4.2+），
+        False 表示总是新建一个临时 Action 再挂到骨架上（3.6）。
+
+        用结构探测而不是版本号判断：只有在 4.2+ 的 importer 里才有 __get_or_create_action，而这个私有方法正是“复用已有 Action”的开关。
+        """
+        return hasattr(self.VMDImporter, '_VMDImporter__get_or_create_action')
+
+    def new_importer(self, filepath, scale=0.08, frame_margin=0):
+        """构造 VMDImporter（构造过程会一次性解析整个 vmd），失败时抛出原始异常"""
+        return self.VMDImporter(
+            filepath=filepath,
+            scale=scale,
+            bone_mapper=self.makePmxBoneMap,
+            frame_margin=frame_margin,
+        )
+
+    def get_parsed_file(self, importer):
+        """取出 importer 内部已经解析好的 vmd.File 实例"""
+        file_obj = getattr(importer, '_VMDImporter__vmdFile', None)
+
+        if isinstance(file_obj, self.vmd.File):
+            return file_obj
+
+        # 兜底：不同版本的私有变量名可能不同，直接在实例字典里找回 vmd.File
+        for value in vars(importer).values():
+            if isinstance(value, self.vmd.File):
+                return value
+
+        return None
+
+
+def load_mmd_tools_modules():
+    """
+    按包名顺序尝试加载 mmd_tools 的 VMD 相关模块。
+
+    返回 MmdToolsModules；mmd_tools 未安装/未启用或版本不匹配时返回 None。
+    """
+    for package_name in MMD_TOOLS_PACKAGE_NAMES:
+        try:
+            vmd_module = importlib.import_module(package_name + '.core.vmd')
+            importer_module = importlib.import_module(package_name + '.core.vmd.importer')
+            utils_module = importlib.import_module(package_name + '.utils')
+        except ImportError:
+            continue
+
+        importer_class = getattr(importer_module, 'VMDImporter', None)
+        bone_mapper = getattr(utils_module, 'makePmxBoneMap', None)
+
+        if importer_class is None or bone_mapper is None:
+            continue
+
+        return MmdToolsModules(package_name, vmd_module, importer_class, bone_mapper)
+
+    return None
+
+
+def get_bl_jp_map(armature, bone_mapper):
+    """
+    返回 {blender 骨骼名: VMD/PMX 日文名}。
+
+    直接复用 mmd_tools 的 makePmxBoneMap 得到 {日文名: pose_bone} 再反转，
+    保证筛选 VMD 骨骼时的名称规则与 mmd_tools 自身导入时完全一致。
+    """
+    pmx_map = bone_mapper(armature) or {}
+
+    result = {}
+    for name_j, pose_bone in pmx_map.items():
+        result.setdefault(pose_bone.name, name_j)
+
+    return result
+
+
+def get_action_bone_fcurves(action, bone_names):
+    """返回 Action 中属于指定骨骼的 F-Curve 列表。bone_names 为可迭代对象。"""
+    if action is None:
+        return []
+
+    bone_names = set(bone_names)
+    result = []
+
+    for fcurve in get_action_fcurves(action):
+        data_path = fcurve.data_path
+
+        if not data_path.startswith(BONE_PATH_PREFIX):
+            continue
+
+        if data_path.split('"', 2)[1] in bone_names:
+            result.append(fcurve)
+
+    return result
+
+
+def remove_bone_fcurves(action, bone_names):
+    """移除 Action 中指定骨骼的全部 F-Curve，返回成功删除的数量"""
+    if action is None or not bone_names:
+        return 0
+
+    return remove_action_fcurves(action, get_action_bone_fcurves(action, bone_names))
+
+
+def set_fcurve_group(action, fcurve, source_group):
+    """把源 F-Curve 的分组信息同步到目标 F-Curve，失败静默（分组仅影响编辑器观感）"""
+    group_name = getattr(source_group, 'name', None)
+
+    if not group_name:
+        return
+
+    try:
+        group = None
+        for existing in action.groups:
+            if existing.name == group_name:
+                group = existing
+                break
+
+        if group is None:
+            group = action.groups.new(group_name)
+
+        fcurve.group = group
+    except (AttributeError, RuntimeError, TypeError, ValueError):
+        pass
+
+
+def assign_action(obj, action):
+    """
+    把 Action 挂到对象上，跨版本通用。
+
+    Blender 5.0 起 Action 是 Slotted Action，动画数据必须绑定到具体的 action_slot，
+    否则即使 Action 里已经有 F-Curve，骨骼也读不到任何动画。
+    """
+    animation_data = obj.animation_data
+    if animation_data is None:
+        animation_data = obj.animation_data_create()
+
+    animation_data.action = action
+
+    if action is None or not hasattr(animation_data, 'action_slot'):
+        return action
+
+    try:
+        # action_slot 从 Blender 4.4 起存在，已有 slot 时不覆盖用户的选择
+        if animation_data.action_slot is None and hasattr(action, 'slots'):
+            for slot in action.slots:
+                animation_data.action_slot = slot
+                break
+    except (RuntimeError, TypeError, ValueError):
+        pass
+
+    return action
+
+
+def ensure_action(obj, action_name=None):
+    """确保对象持有 Action，返回该 Action（没有时新建并挂载）"""
+    animation_data = obj.animation_data
+    if animation_data is None:
+        animation_data = obj.animation_data_create()
+
+    action = animation_data.action
+    if action is None:
+        action = bpy.data.actions.new(name=action_name or obj.name)
+        assign_action(obj, action)
+
+    return action
 
 
 def find_pmx_root():

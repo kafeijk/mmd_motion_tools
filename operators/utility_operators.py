@@ -1,3 +1,4 @@
+import traceback
 from contextlib import contextmanager
 
 from bpy_extras.io_utils import ImportHelper
@@ -42,23 +43,14 @@ class ImportVmdPhysicsOperator(bpy.types.Operator, ImportHelper):
             self.report({'ERROR'}, "请选择MMD模型!")
             return False
 
+        armature = find_pmx_armature(root)
+        if armature is None:
+            self.report({'ERROR'}, "未检测到骨架！")
+            return False
+
         physical_bones = get_physical_bone(root)
         if not physical_bones:
             self.report({'ERROR'}, "当前模型不存在受物理影响骨骼!")
-            return False
-
-        physical_bones = set(physical_bones)
-
-        bone_jp_names = get_vmd_bones(self.filepath)
-        bone_bl_names = [convertNameToLR(n) for n in bone_jp_names]
-
-        found = False
-        for bl_name in bone_bl_names:
-            if bl_name in physical_bones:
-                found = True
-                break
-        if not found:
-            self.report({'ERROR'}, "vmd文件中不存在物理骨骼关键帧!请使用新版MMD桥烘焙得到的文件进行导入")
             return False
 
         return True
@@ -69,6 +61,7 @@ class ImportVmdPhysicsOperator(bpy.types.Operator, ImportHelper):
         layout.prop(self, "margin")
 
     def execute(self, context):
+        start_time = time.time()
         flag = self.check_props(context)
         if not flag:
             return {'CANCELLED'}
@@ -78,29 +71,28 @@ class ImportVmdPhysicsOperator(bpy.types.Operator, ImportHelper):
         root = find_pmx_root_with_child(obj)
         armature = find_pmx_armature(root)
 
-        # 显示源对象
-        show_object(root)
-        show_object(armature)
+        physical_bones = set(get_physical_bone(root))
 
-        # 拷贝骨架
-        copied_armature = copy_obj(armature)
-        copied_armature.parent = None
-        deselect_all_objects()
-        select_and_activate(copied_armature)
+        # 物理关键帧直接写入当前骨架的 Action
+        success, message = import_vmd_physics(
+            armature,
+            filepath=bpy.path.abspath(self.filepath),
+            physical_bones=physical_bones,
+            scale=self.scale,
+            margin=self.margin,
+        )
 
-        # 导入动作
-        import_vmd(filepath=self.filepath, scale=self.scale, margin=self.margin)
+        if not success:
+            self.report({'ERROR'}, message)
+            return {'CANCELLED'}
 
-        # 拷贝物理数据
-        physical_bones = get_physical_bone(root)
-        copy_bone_animation(copied_armature, armature, physical_bones)
         # 通过物理骨骼的 IK 约束查找对应的 IK，并清除 IK 动画、关闭 IK
         set_physical_bone_ik(armature, physical_bones)
 
-        # 移除 copied_armature
-        bpy.data.objects.remove(copied_armature, do_unlink=True)
-        bpy.ops.outliner.orphans_purge(do_local_ids=True, do_linked_ids=True, do_recursive=True)
+        armature.update_tag()
+        context.scene.frame_set(context.scene.frame_current)
 
+        self.report({'INFO'}, f"{message}执行耗时: {time.time() - start_time:.2f} 秒")
         return {'FINISHED'}
 
 
@@ -204,19 +196,11 @@ class RemovePhysicalBoneAnimationOperator(PhysicalBoneOperatorBase, bpy.types.Op
 
 
 def get_physical_bone_fcurves(armature, bone_names):
-    """返回属于指定骨骼的 F-Curve 列表。bone_names 为 set，成员判断为 O(1)。"""
-    result = []
+    """返回当前 Action 中属于指定骨骼的 F-Curve 列表。bone_names 为 set，成员判断为 O(1)。"""
+    animation_data = getattr(armature, 'animation_data', None)
+    action = animation_data.action if animation_data else None
 
-    for fc in get_action_fcurves(armature):
-        data_path = fc.data_path
-
-        if not data_path.startswith(BONE_PATH_PREFIX):
-            continue
-
-        if data_path.split('"', 2)[1] in bone_names:
-            result.append(fc)
-
-    return result
+    return get_action_bone_fcurves(action, bone_names)
 
 
 def clear_pose_transform(pose_bone):
@@ -286,45 +270,128 @@ class UnmutePhysicalBoneAnimationOperator(PhysicalBoneOperatorBase, bpy.types.Op
 
 
 def get_vmd_bones(filepath):
-    """读取 VMD 文件，获取其中包含关键帧的骨骼名称"""
-    try:
-        from mmd_tools.core import vmd
-    except ImportError:
-        try:
-            from bl_ext.blender_org.mmd_tools.core import vmd
-        except ImportError:
-            return None
+    """读取 VMD 文件，获取其中包含关键帧的骨骼名称，失败返回 None"""
+    modules = load_mmd_tools_modules()
+    if modules is None:
+        return None
 
-    vmd_file = vmd.File()
-    vmd_file.load(filepath=filepath)
+    try:
+        vmd_file = modules.vmd.File()
+        vmd_file.load(filepath=filepath)
+    except Exception:
+        traceback.print_exc()
+        return None
 
     return list(vmd_file.boneAnimation.keys())
 
 
-def copy_bone_animation(src_armature, dst_armature, bone_names):
-    """将指定骨骼的动画从源 Action 完整覆盖到目标 Action。"""
+@timeit
+def import_vmd_physics(armature, filepath, physical_bones, scale=0.08, margin=0):
+    """
+    把 VMD 中物理骨骼的关键帧直接写入当前活动骨架的 Action。
+    返回 (是否成功, 提示信息)：失败时提示信息可直接 report 给用户。
+    """
+    modules = load_mmd_tools_modules()
+    if modules is None:
+        return False, "无法加载MMD Tools的VMD模块，请检查当前MMD Tools版本是否兼容！"
 
-    src_action = (
-        src_armature.animation_data.action
-        if src_armature.animation_data
-        else None
-    )
+    # 构造 VMDImporter：这一步会完整解析整个 VMD 文件
+    try:
+        importer = modules.new_importer(filepath, scale=scale, frame_margin=margin)
+    except Exception:
+        return False, "VMD文件读取失败，请检查文件是否有效！"
+
+    # 获取解析完成的 vmd_file 实例
+    vmd_file = modules.get_parsed_file(importer)
+    if vmd_file is None:
+        return False, "VMD解析结果获取失败，请检查当前MMD Tools版本是否兼容！"
+
+    # 获取物理骨骼日文名称
+    bl_jp_map = get_bl_jp_map(armature, modules.makePmxBoneMap)
+    physical_jp_bl_map = {}
+    for bl_name in physical_bones:
+        name_j = bl_jp_map.get(bl_name)
+        if name_j:
+            physical_jp_bl_map.setdefault(name_j, bl_name)
+
+    # 只保留物理骨骼的关键帧
+    bone_animation = modules.vmd.BoneAnimation()
+    for jp_name, frames in vmd_file.boneAnimation.items():
+        if jp_name in physical_jp_bl_map:
+            bone_animation[jp_name] = frames
+
+    # 真正会被写入的blender骨骼名，用于后续覆盖/合并
+    written_bones = {physical_jp_bl_map[jp_name] for jp_name in bone_animation}
+
+    # 校验物理骨骼关键帧是否存在
+    bone_count = len(bone_animation)
+    frame_count = sum(len(frames) for frames in bone_animation.values())
+    if bone_count < 1 or frame_count < 1:
+        return False, "vmd文件中不存在物理骨骼关键帧!请使用新版MMD桥烘焙得到的文件进行导入"
+
+    # 回写裁剪后的骨骼动画
+    vmd_file.boneAnimation = bone_animation
+
+    # 物理导入不需要 IK 开关动画（后续统一由 set_physical_bone_ik 关闭物理相关 IK）
+    vmd_file.propertyAnimation = modules.vmd.PropertyAnimation()
+
+    # 准备目标 Action，没有动画数据时先建一个
+    dst_action = ensure_action(armature, action_name=f"{armature.name}_Action")
+    dst_name = dst_action.name
+
+    # 移除已有关键帧
+    remove_bone_fcurves(dst_action, written_bones)
+
+    # 交由 mmd_tools 生成物理骨骼的 F-Curve，两个分支：
+    #   4.2+ ：importer 复用 dst_action 并直接写入，到这里就已经完成写入
+    #   3.6  ：importer 新建一个临时 Action 挂到骨架上，之后需要合并回 dst_action
+    action_name = f"{os.path.splitext(os.path.basename(filepath))[0]}_physics"
+    importer.assign(armature, action_name)
+
+    animation_data = armature.animation_data
+    produced_action = animation_data.action
+
+    try:
+        # 用名称比较而不是 is：RNA 包装对象可能不是同一个 Python 实例，
+        # 而 bpy.data.actions 内名称唯一，因此按名称判断与判断身份等价且更稳。
+        if produced_action is not None and produced_action.name != dst_name:
+            try:
+                # 合并物理数据到目标 Action
+                copy_bone_fcurves(produced_action, dst_action, written_bones)
+            finally:
+                # 临时 Action 用完即删，并把骨架原本的 Action 换回来
+                animation_data.action = dst_action
+                remove_action(produced_action)
+    except Exception:
+        return False, "物理数据写入失败，请检查当前MMD Tools版本是否兼容！"
+
+    # Blender 5.0 起动画数据必须绑定到 action_slot，这里统一补一次
+    assign_action(armature, dst_action)
+
+    return True, f"已导入 {len(written_bones)} 个物理骨骼的关键帧。"
+
+
+def remove_action(action):
+    """删除无用 Action"""
+    if action is None:
+        return
+
+    try:
+        if action.name in bpy.data.actions:
+            bpy.data.actions.remove(action)
+    except (ReferenceError, RuntimeError):
+        pass
+
+
+@timeit
+def copy_bone_fcurves(src_action, dst_action, bone_names):
+    """将指定骨骼的动画从源 Action 完整覆盖到目标 Action。"""
 
     if not src_action:
         return
 
-    dst_action = (
-        dst_armature.animation_data.action
-        if dst_armature.animation_data
-        else None
-    )
-
     if not dst_action:
-        dst_armature.animation_data_create()
-        dst_action = bpy.data.actions.new(
-            name=f"{dst_armature.name}_Action"
-        )
-        dst_armature.animation_data.action = dst_action
+        return
 
     bone_names = set(bone_names)
 
@@ -361,6 +428,9 @@ def copy_bone_animation(src_armature, dst_armature, bone_names):
                 continue
 
             dst_fcurves[key] = new_fc
+
+            # 沿用源曲线的骨骼分组，合并后不至于丢失 Action 里的分组结构
+            set_fcurve_group(dst_action, new_fc, getattr(fc, 'group', None))
         else:
             # 完整覆盖目标 F-Curve
             new_fc.keyframe_points.clear()
