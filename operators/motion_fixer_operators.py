@@ -289,9 +289,6 @@ class SyncRangeOperator(MotionBaseOperator, bpy.types.Operator):
                 continue
 
             select_fcurve_keyframes_in_range(fc, frame_start, frame_end)
-
-        # 刷新场景，立即显示结果
-        context.scene.frame_set(context.scene.frame_current)
         return True
 
 
