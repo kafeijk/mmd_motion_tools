@@ -1049,7 +1049,7 @@ def apply_transform(obj, data_path, offset, frame_start, frame_end, current_valu
         fc.update()
 
     if margin > 0:
-        remove_margin_keys(fcurve_map.values(), frame_start, frame_end, margin)
+        remove_margin_keys(fcurve_map.values(), frame_start, frame_end, margin, update=False)
 
 
 def set_keyframe_value(kp, value):
@@ -1061,7 +1061,7 @@ def set_keyframe_value(kp, value):
     kp.handle_right.y += offset
 
 
-def remove_margin_keys(fcurves, frame_start, frame_end, margin):
+def remove_margin_keys(fcurves, frame_start, frame_end, margin, update=True):
     """删除范围边缘的关键帧"""
     for fc in fcurves:
         fc.update()
@@ -1092,7 +1092,8 @@ def remove_margin_keys(fcurves, frame_start, frame_end, margin):
         )
 
     # 刷新场景以更新视图
-    bpy.context.scene.frame_set(bpy.context.scene.frame_current)
+    if update:
+        bpy.context.scene.frame_set(bpy.context.scene.frame_current)
 
 
 def smooth_key_transition(fc, frame_pairs):
