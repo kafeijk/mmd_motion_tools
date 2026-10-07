@@ -68,16 +68,8 @@ def select_bake_bone(armature, mode, display_type):
         "KEYFRAME": PMX_BAKE_BONES,
     }
 
-    original_mode = armature.mode
-
     if mode in bone_modes:
         bake_bones = set(bone_modes[mode])
-
-        # 选中骨架并进入姿态模式
-        deselect_all_objects()
-        show_object(armature)
-        select_and_activate(armature)
-        bpy.ops.object.mode_set(mode='POSE')
 
         for pb in armature.pose.bones:
             is_bake_bone = pb.mmd_bone.name_j in bake_bones
@@ -88,10 +80,6 @@ def select_bake_bone(armature, mode, display_type):
         for pb in armature.pose.bones:
             set_bone_hide(pb, pb.mmd_bone.is_tip)
             armature.data.display_type = display_type
-
-    # 恢复原模式
-    if original_mode != 'POSE':
-        bpy.ops.object.mode_set(mode=original_mode)
 
 
 class FlipPoseOperator(bpy.types.Operator):
