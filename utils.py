@@ -41,6 +41,9 @@ CONVERT_NAME_TO_R_REGEXP = re.compile('^(.*)右(.*)$')
 # 姿态骨骼数据路径前缀
 BONE_PATH_PREFIX = 'pose.bones["'
 
+# 骨架对象上保存骨骼原始显示/隐藏状态的自定义属性名
+ORIGINAL_BONE_HIDE_PROP = 'mmd_motion_tools_original_bone_hide'
+
 
 def timeit(func):
     @functools.wraps(func)
@@ -753,6 +756,79 @@ def set_bone_hide(bone, hide):
         bone.hide = hide
     else:
         bone.bone.hide = hide
+
+
+def get_bone_hide(bone):
+    """读取骨骼隐藏状态，兼容 Blender 5.0"""
+    if bpy.app.version >= (5, 0, 0):
+        return bool(bone.hide)
+    else:
+        return bool(bone.bone.hide)
+
+
+def save_original_bone_hide(armature):
+    """
+    在骨架对象上记录所有骨骼原始的显示/隐藏状态。
+
+    只在首次调用（属性不存在或为空）时写入，已有值时不再覆盖，
+    """
+    if armature is None:
+        return
+
+    # 已有记录则跳过，避免把精简后的状态误当成原始状态
+    if armature.get(ORIGINAL_BONE_HIDE_PROP):
+        return
+
+    states = {}
+    for pb in armature.pose.bones:
+        # 骨骼名为空或超长时无法作为自定义属性键
+        if not pb.name:
+            continue
+        states[pb.name] = get_bone_hide(pb)
+
+    if not states:
+        return
+
+    try:
+        armature[ORIGINAL_BONE_HIDE_PROP] = states
+    except (AttributeError, RuntimeError, TypeError, ValueError):
+        pass
+
+
+def get_original_bone_hide(armature):
+    """读取骨架上记录的骨骼原始显示/隐藏状态，返回 {骨骼名: 是否隐藏}，无记录时返回空字典"""
+    if armature is None:
+        return {}
+
+    states = armature.get(ORIGINAL_BONE_HIDE_PROP)
+    if not states:
+        return {}
+
+    # IDPropertyGroup 转为普通字典，便于按骨骼名取值
+    to_dict = getattr(states, "to_dict", None)
+    if callable(to_dict):
+        states = to_dict()
+    else:
+        states = {name: states[name] for name in states.keys()}
+
+    return {name: bool(hidden) for name, hidden in states.items()}
+
+
+def restore_original_bone_hide(armature):
+    """
+    按骨架上记录的原始状态恢复骨骼显示/隐藏。
+    成功恢复返回 True；没有记录（属性被删除等）时返回 False，由调用方兜底。
+    """
+    states = get_original_bone_hide(armature)
+    if not states:
+        return False
+
+    for pb in armature.pose.bones:
+        if pb.name not in states:
+            continue
+        set_bone_hide(pb, states[pb.name])
+
+    return True
 
 
 def find_ancestor(obj):

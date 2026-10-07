@@ -21,10 +21,10 @@ class SimplifyBoneOperator(bpy.types.Operator):
         name="显示范围",
         description="参与K帧的骨骼",
         items=[
-            ("ARM1", "手臂", "选择手臂骨骼（不含捩骨）"),
-            ("ARM2", "手臂（含捩骨）", "选择手臂骨骼（包含捩骨）"),
-            ("KEYFRAME", "K帧骨骼", "选择用于K帧的常用骨骼"),
-            ("DEFAULT", "默认骨骼", "选择导入Blender后默认显示的骨骼"),
+            ("ARM1", "手臂", "手臂骨骼（不含捩骨）"),
+            ("ARM2", "手臂（含捩骨）", "手臂骨骼（包含捩骨）"),
+            ("KEYFRAME", "K帧骨骼", "用于K帧的常用骨骼"),
+            ("DEFAULT", "默认骨骼", "点击按钮前的骨骼显示情况"),
         ],
         default="ARM1",
     )
@@ -68,6 +68,9 @@ def select_bake_bone(armature, mode, display_type):
         "KEYFRAME": PMX_BAKE_BONES,
     }
 
+    # 首次点击时记录骨骼原始显示/隐藏状态，已有记录则不覆盖
+    save_original_bone_hide(armature)
+
     if mode in bone_modes:
         bake_bones = set(bone_modes[mode])
 
@@ -75,11 +78,11 @@ def select_bake_bone(armature, mode, display_type):
             is_bake_bone = pb.mmd_bone.name_j in bake_bones
             # 保留预设骨骼，隐藏其他骨骼
             set_bone_hide(pb, not is_bake_bone)
-            armature.data.display_type = display_type
     else:
-        for pb in armature.pose.bones:
-            set_bone_hide(pb, pb.mmd_bone.is_tip)
-            armature.data.display_type = display_type
+        # 默认骨骼：恢复为原始显示/隐藏状态
+        restore_original_bone_hide(armature)
+
+    armature.data.display_type = display_type
 
 
 class FlipPoseOperator(bpy.types.Operator):
