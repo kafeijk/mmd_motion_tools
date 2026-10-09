@@ -84,6 +84,9 @@ def select_bake_bone(armature, mode, display_type):
 
     armature.data.display_type = display_type
 
+    # 标记更新，避免多次、频繁点击下骨骼显示不准确
+    armature.update_tag()
+
 
 class FlipPoseOperator(bpy.types.Operator):
     bl_idname = "mmd_motion_tools.flip_pose"
