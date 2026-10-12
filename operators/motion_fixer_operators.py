@@ -4,6 +4,8 @@ from ..utils import *
 class MotionBaseOperator:
     """动作工具基础类"""
 
+    select_bones_message = '请选择骨骼!'
+
     def check_basic(self, context, check_select=True, count=None):
         armature = self.get_armature(context)
         if not armature:
@@ -12,7 +14,7 @@ class MotionBaseOperator:
         bones = get_selected_bones(armature)
 
         if check_select and not bones:
-            self.report({'ERROR'}, '请选择骨骼!')
+            self.report({'ERROR'}, self.select_bones_message)
             return None
 
         if check_select and count and len(bones) != count:

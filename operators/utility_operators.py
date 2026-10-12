@@ -915,8 +915,11 @@ def dopesheet_override(context):
 class SyncKeyframesOperator(MotionBaseOperator, bpy.types.Operator):
     bl_idname = "mmd_motion_tools.sync_keyframes"
     bl_label = "同步关键帧"
-    bl_description = "将指定范围的关键帧同步到目标范围"
+    bl_description = "将选中骨骼在指定范围内的关键帧同步到目标范围"
     bl_options = {'UNDO'}
+
+    # 覆盖基类的默认提示，让同步关键帧的报错更有指向性
+    select_bones_message = '请选择需要同步的骨骼'
 
     start: bpy.props.IntProperty()
     end: bpy.props.IntProperty()
