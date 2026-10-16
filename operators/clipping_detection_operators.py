@@ -119,7 +119,7 @@ class ClippingDetectionOperator(bpy.types.Operator):
         #         to_delete.append(obj)
         # for d in to_delete:
         #     bpy.data.objects.remove(d, do_unlink=True)
-        detect_collisions_between_objects(pairs, 250)
+        detect_collisions_between_objects(pairs, 1, 250)
         print(f"总耗时: {time.perf_counter() - start_time:.4f} 秒")
         return True
 
