@@ -1241,6 +1241,38 @@ def copy_obj(obj, col=None):
     return new_obj
 
 
+def find_layer_collection_by_name(layer_collection, collection_name):
+    """递归查询集合"""
+    # 如果当前集合名称匹配
+    if layer_collection.name == collection_name:
+        return layer_collection
+
+    # 遍历子集合，递归查找
+    for child in layer_collection.children:
+        result = find_layer_collection_by_name(child, collection_name)
+        if result:
+            return result
+
+    # 如果没有找到匹配的集合，返回 None
+    return None
+
+
+def get_collection(collection_name):
+    """获取指定名称集合，没有则新建，然后激活"""
+    if collection_name in bpy.data.collections:
+        collection = bpy.data.collections[collection_name]
+    else:
+        collection = bpy.data.collections.new(collection_name)
+
+    # 新建和原有集合都可能未被link
+    if collection.name not in bpy.context.scene.collection.children:
+        bpy.context.scene.collection.children.link(collection)
+
+    layer_collection = find_layer_collection_by_name(bpy.context.view_layer.layer_collection, collection_name)
+    bpy.context.view_layer.active_layer_collection = layer_collection
+    return collection
+
+
 def import_vmd(filepath, scale=0.08, margin=0):
     filepath = bpy.path.abspath(filepath)
 

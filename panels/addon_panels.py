@@ -1,5 +1,6 @@
 from ..operators.bone_operators import SimplifyBoneOperator, FlipPoseOperator
 from ..operators.camera_motion_fixer_operators import FindCameraSegmentOperator, CameraMotionFixerOperator
+from ..operators.clipping_detection_operators import ClippingDetectionOperator
 from ..operators.motion_fixer_operators import MotionFixerOperator, SyncRangeOperator, RemoveOuterKeyframesOperator, \
     RemoveInnerKeyframesOperator, DeselectKeyframesOperator
 from ..operators.utility_operators import ImportVmdPhysicsOperator, RemovePhysicalBoneAnimationOperator, \
@@ -96,6 +97,33 @@ class FindRepeatedMotion_PT_Panel(bpy.types.Panel):
             row.enabled = True
         row = col.row(align=True)
         row.operator(ClearRepeatedOperator.bl_idname, text=ClearRepeatedOperator.bl_label)
+
+class ClippingDetection_PT_Panel(bpy.types.Panel):
+    bl_label = "穿模检测"
+    bl_idname = "MOTIONTOOLS_PT_detect_clipping"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_parent_id = "MOTIONTOOLS_PT_motion_fixer"
+    bl_order = 1
+
+    def draw(self, context):
+        scene = context.scene
+        props = scene.mmd_motion_tools_detect_clipping
+
+        layout = self.layout
+        layout.use_property_split = True
+        layout.use_property_decorate = False
+        col = layout.column()
+
+        col.prop(props, "mode")
+        sub = col.row(align=True)
+        sub.scale_x = 0.8
+        if not scene.use_preview_range:
+            sub.prop(scene, "frame_start", text="检测范围")
+            sub.prop(scene, "frame_end", text="")
+        col.prop(props, "proxy_accuracy")
+        col.operator(ClippingDetectionOperator.bl_idname, text=ClippingDetectionOperator.bl_label)
+
 
 
 class MotionFixer_PT_Panel(bpy.types.Panel):
