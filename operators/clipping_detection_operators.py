@@ -124,6 +124,113 @@ class ClippingDetectionOperator(bpy.types.Operator):
         return True
 
 
+def apply_shape_key_mix(obj):
+    """
+    把当前形态键的混合结果烘焙进网格
+
+    核心逻辑：
+    result = basis.co
+    for k in key_blocks[1:]:
+        if k.mute or abs(k.value) < 1e-8: continue
+        result += (k.co - k.relative_key.co) * k.value
+    """
+    mesh = obj.data
+    shape_keys = mesh.shape_keys
+    if shape_keys is None:
+        return
+
+    # 延迟导入，避免拖慢插件加载速度
+    import numpy as np
+
+    key_blocks = list(shape_keys.key_blocks)
+    basis = key_blocks[0]  # 第 0 个永远是 Basis（基准形态）
+    vertex_count = len(mesh.vertices)
+    # 每个顶点有 x/y/z 三个坐标，所以统一按「顶点数 行 × 3 列」的二维数组看待
+    shape = (vertex_count, 3)
+
+    # ------------------------------------------------------------------
+    # 1. 取出基准坐标
+    # ------------------------------------------------------------------
+    # np.empty(n)：申请一块能装 n 个数的内存，**但不清零**（内容随机）。
+    # 比 np.zeros 稍快，因为反正下一步就会把它整个覆盖掉。
+    # 长度写 vertex_count * 3（扁平的一维），因为 Blender 的 foreach_get
+    # 只认扁平数组——它眼里就是一串紧密排列的浮点数。
+    # dtype=np.float32 很重要：Blender 内部就用单精度存坐标，
+    # 用 float32 才能和官方算子的结果逐位相同（用 float64 会有微小差异）。
+    base = np.empty(vertex_count * 3, dtype=np.float32)
+
+    # foreach_get("co", base)：把基准形态键的全部顶点坐标一次性拷贝进 base。
+    # 这是 Blender 提供的批量读写接口，相当于 C 层的 memcpy，一次调用搬完整个数组。
+    # 换成 Python 写法 [tuple(p.co) for p in basis.data] 会慢几十倍，
+    # 因为要为每个坐标创建一个 Python 对象。
+    basis.data.foreach_get("co", base)
+
+    # reshape：只是「换个看法」，把同一块内存按每 3 个数一组重新解释成二维。
+    # 不复制数据、几乎零开销。之后 base[i] 就是第 i 个顶点的 (x, y, z)。
+    base = base.reshape(shape)
+
+    # ------------------------------------------------------------------
+    # 2. 逐个形态键累加  delta * value
+    # ------------------------------------------------------------------
+    # .copy() 才是真正的复制。mixed 从基准坐标出发，后面往上累加 delta。
+    # 不能写成 mixed = base —— 那样 mixed 和 base 是同一块内存，改 mixed 会把基准也改掉。
+    mixed = base.copy()
+
+    # 复用同一块缓冲区轮流装每个形态键的坐标，避免在循环里反复申请/释放内存
+    buffer = np.empty(vertex_count * 3, dtype=np.float32)
+    relative_buffer = None  # 只有遇到 relative_key 不是基准时才需要，懒申请
+    # https://docs.blender.org/api/current/bpy.types.bpy_struct.html#bpy.types.bpy_struct.as_pointer
+    # as_pointer() 返回这个形态键在内存中的地址，用来判断两个形态键是不是同一个。
+    # 不能用 is 或 == 比较，因为每次访问 .relative_key 拿到的都是新的 Python 包装对象。
+    basis_pointer = basis.as_pointer()
+
+    for key_block in key_blocks[1:]:  # 跳过第 0 个（Basis 自己）
+        value = key_block.value
+        # 与 Blender 的形态键求值保持一致：静音或形态键数值为 0 的形态键不参与混合
+        if abs(value) < 1e-8 or getattr(key_block, "mute", False):
+            continue
+
+        # 取出这个形态键的整套坐标（同样是一次 memcpy），再按 (顶点数, 3) 看待
+        key_block.data.foreach_get("co", buffer)
+        current = buffer.reshape(shape)
+
+        relative = key_block.relative_key
+        if relative is None or relative.as_pointer() == basis_pointer:
+            # 绝大多数情况：relative_key 就是 Basis，直接相对基准做差
+            # current - base 是「逐元素相减」：numpy 会把全部顶点的 x/y/z
+            # 一次性算完（底层是 C 循环），不需要我们写 Python for 循环
+            delta = current - base
+        else:
+            # 少数情况：relative_key 指向另一个形态键，那就相对那一个做差
+            if relative_buffer is None:
+                relative_buffer = np.empty(vertex_count * 3, dtype=np.float32)
+            relative.data.foreach_get("co", relative_buffer)
+            delta = current - relative_buffer.reshape(shape)
+
+        # delta * value：每个元素都乘同一个标量，numpy 会自动「广播」，
+        # 不需要写循环。
+        # mixed += ...：原地累加，不产生新数组，省内存也省时间。
+        mixed += delta * value
+
+    # ------------------------------------------------------------------
+    # 3. 写回网格，然后删除形态键
+    # ------------------------------------------------------------------
+    # reshape(-1) 把二维数组重新摊平成一维（foreach_set 同样只认扁平数组）；
+    # np.ascontiguousarray 保证这些数在内存里是连续排列的（当前本来就是，
+    # 加上是为了防止以后改动破坏这个前提，导致 foreach_set 读错）。
+    flat = np.ascontiguousarray(mixed.reshape(-1))
+
+    # 写回基准形态键
+    basis.data.foreach_set("co", flat)
+    # 同时也要写回网格本体。mesh.vertices 里存的是「基准形状」的坐标，
+    # 而下面 shape_key_clear() 删掉形态键之后，网格显示的就是 mesh.vertices。
+    # 只写其中一处的话，形态键一删，形状就会弹回原来的基准。
+    mesh.vertices.foreach_set("co", flat)
+
+    # 删除全部形态键
+    obj.shape_key_clear()
+
+
 @timeit
 def create_tmp_obj(context, objects, tmp_col):
     copied_objs = []
@@ -131,24 +238,20 @@ def create_tmp_obj(context, objects, tmp_col):
         copied_obj = copy_obj(obj, tmp_col)
         copied_objs.append(copied_obj)
 
+    ensure_object_mode(context)
+    select_only_objects(context, copied_objs)
+
     for copied_obj in copied_objs:
-        deselect_all_objects()
-        select_and_activate(copied_obj)
         # 应用形态键
         if copied_obj.data.shape_keys:
-            bpy.ops.object.shape_key_remove(all=True, apply_mix=True)
+            apply_shape_key_mix(copied_obj)
         # 移除骨架修改器之外的修改器
         for modifier in list(copied_obj.modifiers):
             if modifier.type != 'ARMATURE':
                 copied_obj.modifiers.remove(modifier)
 
     if len(copied_objs) > 1:
-        deselect_all_objects()
-        for copied_obj in copied_objs:
-            select_and_activate(copied_obj)
         bpy.ops.object.join()
-    else:
-        select_and_activate(copied_objs[0])
 
     tmp_obj = context.view_layer.objects.active
     return tmp_obj

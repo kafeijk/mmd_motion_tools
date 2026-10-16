@@ -1288,3 +1288,28 @@ def import_vmd(filepath, scale=0.08, margin=0):
         kwargs["create_new_action"] = True
 
     return bpy.ops.mmd_tools.import_vmd('EXEC_DEFAULT', **kwargs)
+
+
+def ensure_object_mode(context):
+    """仅在实际需要时切回物体模式"""
+    if context.view_layer.objects.active is None:
+        return
+    if context.mode != "OBJECT":
+        bpy.ops.object.mode_set(mode='OBJECT')
+
+
+def select_only_objects(context, objects):
+    """只选中给定物体"""
+    view_layer = context.view_layer
+    try:
+        # https://docs.blender.org/api/current/bpy.types.ViewLayer.html#bpy.types.ViewLayer.objects
+        for obj in view_layer.objects:
+            if obj.select_get():
+                obj.select_set(False)
+        for obj in objects:
+            obj.select_set(True)
+        if objects:
+            view_layer.objects.active = objects[-1]
+    except RuntimeError:
+        # RuntimeError: 错误: 物体 'xxx' 不在视图层 'ViewLayer'中, 所以无法选中!
+        pass
