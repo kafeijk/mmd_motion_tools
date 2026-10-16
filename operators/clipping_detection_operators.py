@@ -259,32 +259,48 @@ def create_tmp_obj(context, objects, tmp_col):
 
 @timeit
 def classify_vertices(obj, threshold=0.25):
-    part_vertices = OrderedDict((part, []) for part in PART_VGS)
+    """
+    按顶点组权重把顶点归类到身体部件
 
+    规则：把一个顶点在「同一部件内的所有顶点组」上的权重加起来，
+    取第一个（按 PART_VGS 顺序）总和超过 threshold 的部件。
+    每个顶点最多归入一个部件。
+    """
+    part_names = list(PART_VGS.keys())
+    part_count = len(part_names)
+
+    # 顶点组名称 -> 顶点组索引（顶点组索引是从 0 开始的连续整数）
     vertex_groups = {
         vg.name: vg.index
         for vg in obj.vertex_groups
     }
 
-    part_vg_indexes = OrderedDict()
-    for part, vg_names in PART_VGS.items():
-        vg_indexes = {
-            vertex_groups[name]
-            for name in vg_names
-            if name in vertex_groups
-        }
-        part_vg_indexes[part] = vg_indexes
+    # 建查表：顶点组索引 -> 所属部件序号。
+    # 用列表而不是字典，因为顶点组索引本身就是连续整数，列表查表更快。
+    # 前提：PART_VGS 里各部件的顶点组互不重叠，一个顶点组只属于一个部件。
+    table_size = max(vertex_groups.values(), default=-1) + 1
+    vg_to_part = [-1] * table_size  # -1 = 这个顶点组不属于任何关注的部件
+    for part_index, vg_names in enumerate(PART_VGS.values()):
+        for name in vg_names:
+            vg_index = vertex_groups.get(name)
+            if vg_index is not None:
+                vg_to_part[vg_index] = part_index
 
-    for vertex in obj.data.vertices:
-        for part, vg_indexes in part_vg_indexes.items():
-            weight = sum(
-                group.weight
-                for group in vertex.groups
-                if group.group in vg_indexes
-            )
+    part_vertices = OrderedDict((part, []) for part in part_names)
+    # 提前把每个部件的 append 取出来，循环里少一次属性查找
+    append_to_part = [part_vertices[part].append for part in part_names]
 
-            if weight > threshold:
-                part_vertices[part].append(vertex.index)
+    # enumerate 自带计数，省掉每次读 vertex.index，二者顺序一致
+    for vertex_index, vertex in enumerate(obj.data.vertices):
+        weights = [0.0] * part_count
+        for element in vertex.groups:
+            part_index = vg_to_part[element.group]
+            if part_index >= 0:
+                weights[part_index] += element.weight
+
+        for part_index in range(part_count):
+            if weights[part_index] > threshold:
+                append_to_part[part_index](vertex_index)
                 break
 
     return part_vertices
