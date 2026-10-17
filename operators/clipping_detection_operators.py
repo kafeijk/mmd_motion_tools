@@ -105,6 +105,10 @@ class ClippingDetectionOperator(bpy.types.Operator):
         bb_names = [bb.name for bb in breast_bones]
         part_vgs = copy.deepcopy(PART_VGS)
         part_vgs["BREAST"] = bb_names
+        # 自定义拓展：把额外指定的骨骼（顶点组）当作独立部件 CUSTOM 参与检测，
+        custom_vgs = split_names(props.custom_bones_str)
+        if custom_vgs:
+            part_vgs["CUSTOM"] = custom_vgs
         part_vertices = classify_vertices(tmp_obj, part_vgs)
         part_objs = create_part_meshes(props, tmp_obj, part_vertices, tmp_col)
 

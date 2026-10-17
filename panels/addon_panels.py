@@ -5,7 +5,8 @@ from ..operators.motion_fixer_operators import MotionFixerOperator, SyncRangeOpe
     RemoveInnerKeyframesOperator, DeselectKeyframesOperator
 from ..operators.utility_operators import ImportVmdPhysicsOperator, RemovePhysicalBoneAnimationOperator, \
     MutePhysicalBoneAnimationOperator, UnmutePhysicalBoneAnimationOperator, \
-    FindRepeatedMotionOperator, ClearRepeatedOperator, SyncKeyframesOperator, FindRepeatedMotionStrongOperator
+    FindRepeatedMotionOperator, ClearRepeatedOperator, SyncKeyframesOperator, FindRepeatedMotionStrongOperator, \
+    GetSelectedBoneNameOperator
 from ..utils import *
 
 
@@ -121,8 +122,14 @@ class ClippingDetection_PT_Panel(bpy.types.Panel):
             sub.prop(scene, "frame_start", text="时间范围")
             sub.prop(scene, "frame_end", text="")
         col.prop(props, "proxy_accuracy")
+
         if props.show_detection_range:
+            custom_row = col.row(align=True)
+            custom_row.prop(props, "custom_bones_str")
+            custom_row.operator(GetSelectedBoneNameOperator.bl_idname, text="", icon="MOUSE_LMB")
+
             col.prop(props, "detection_range")
+
         col.prop(props, "show_detection_range")
         col.prop(props, "remove_tmp")
         col.operator(ClippingDetectionOperator.bl_idname, text=ClippingDetectionOperator.bl_label)

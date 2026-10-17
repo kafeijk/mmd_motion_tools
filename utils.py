@@ -1242,6 +1242,27 @@ def convertNameToLR(name, use_underscore=False):
     return name
 
 
+def split_names(names_str):
+    """
+    把「逗号分隔的名称」字符串拆成列表
+
+    支持中文逗号、英文逗号（可混用），自动去掉首尾空白与空项。
+    返回的列表保持输入顺序并已去重。
+    """
+    if not names_str:
+        return []
+
+    names = []
+    seen = set()
+    for name in re.split(r"[,，]+", names_str):
+        name = name.strip()
+        if name and name not in seen:
+            seen.add(name)
+            names.append(name)
+
+    return names
+
+
 def copy_obj(obj, col=None):
     new_mesh = obj.data.copy()
     new_obj = obj.copy()

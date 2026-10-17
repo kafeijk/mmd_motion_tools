@@ -68,6 +68,14 @@ class ClippingDetectionProperty(bpy.types.PropertyGroup):
         },
     )
 
+    # 自定义拓展：把额外的骨骼（顶点组）当作独立部件 CUSTOM 参与检测，
+    custom_bones_str: bpy.props.StringProperty(
+        name="自定义拓展",
+        description="通过额外的骨骼名称，扩展检测范围中的「自定义拓展」部件\n"
+                    "在此处输入骨骼名称，并以中文逗号或英文逗号作为分隔",
+        default="",
+    )
+
     # 是否在面板上显示「检测范围」
     show_detection_range: bpy.props.BoolProperty(
         name="显示检测范围",
