@@ -33,6 +33,31 @@ def sync_custom_detection_range(props):
     props.detection_range = current | custom_keys
 
 
+def keep_detection_range(props):
+    """
+    检测范围至少保留一项：把最后一项也取消时，回滚到上一次的选择
+
+    上一次的选择记在 detection_range_backup 里（RNA 属性，能跟着 .blend 一起保存），
+    否则重开文件后模块级缓存就没了，只有一项时取消会误跳到默认值。
+    """
+    current = set(props.detection_range)
+
+    if current:
+        backup = ",".join(sorted(current))
+        if props.detection_range_backup != backup:
+            props.detection_range_backup = backup
+        return
+
+    # 优先回滚到上一次的选择；没有历史（例如旧文件里存的就是空值）时恢复成属性定义里的 default
+    fallback = set(split_names(props.detection_range_backup))
+    if not fallback:
+        fallback = set(props.bl_rna.properties["detection_range"].default_flag)
+    if not fallback:
+        return
+
+    props.detection_range = fallback
+
+
 class ClippingRangeItem(bpy.types.PropertyGroup):
     """一段连续的穿模区间"""
     start: bpy.props.IntProperty(name="起始帧")
@@ -88,6 +113,14 @@ class ClippingDetectionProperty(bpy.types.PropertyGroup):
             "FOREARM-HEAD",
             "FOREARM-BREAST",
         },
+        update=lambda self, context: keep_detection_range(self),
+    )
+
+    # 上一次非空的检测范围（内部使用）：逗号分隔的标识符
+    detection_range_backup: bpy.props.StringProperty(
+        name="上次检测范围",
+        description="内部使用：记录上一次非空的检测范围，用于阻止把检测范围取消到空",
+        default="",
     )
 
     # 自定义拓展：把额外的骨骼（顶点组）当作独立部件 CUSTOM 参与检测，
