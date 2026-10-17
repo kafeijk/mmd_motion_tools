@@ -81,6 +81,7 @@ class ClippingDetectionOperator(bpy.types.Operator):
 
     def detect_clipping(self, context):
         start_time = time.perf_counter()
+        props = context.scene.mmd_motion_tools_detect_clipping
 
         root = find_pmx_root()
         armature = find_pmx_armature(root)
@@ -91,7 +92,7 @@ class ClippingDetectionOperator(bpy.types.Operator):
 
         part_vertices = classify_vertices(tmp_obj)
 
-        part_objs = create_part_meshes(tmp_obj, part_vertices, tmp_col)
+        part_objs = create_part_meshes(props, tmp_obj, part_vertices, tmp_col)
 
         # 在场景切换前获取首尾帧，否则切换后将变为默认值
         frame_start = context.scene.frame_start
@@ -346,7 +347,7 @@ def classify_vertices(obj, threshold=0.25):
 
 
 @timeit
-def create_part_meshes(obj, part_vertices, col):
+def create_part_meshes(props, obj, part_vertices, col):
     """
     把临时网格按身体部件拆成多个代理网格
 
@@ -515,12 +516,22 @@ def create_part_meshes(obj, part_vertices, col):
     # ------------------------------------------------------------------
     # 5. 减面
     # ------------------------------------------------------------------
+    proxy_accuracy = props.proxy_accuracy
     for part_obj in part_objs.values():
+        vertex_count = len(part_obj.data.vertices)
+
         select_only_objects(bpy.context, [part_obj])
         m_name = "Decimate"
         modifier = part_obj.modifiers.new(name=m_name, type='DECIMATE')
         modifier.decimate_type = 'COLLAPSE'
-        modifier.ratio = 0.1
+
+        if proxy_accuracy == "FULL":
+            modifier.ratio = 1
+        elif proxy_accuracy == "BALANCED":
+            modifier.ratio = min(2000 / vertex_count, 1)
+        else:
+            modifier.ratio = min(500 / vertex_count, 1)
+
         modifier.use_symmetry = True
         bpy.ops.object.modifier_apply(modifier=m_name)
 
