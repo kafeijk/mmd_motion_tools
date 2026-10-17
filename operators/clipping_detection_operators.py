@@ -93,37 +93,74 @@ class ClippingDetectionOperator(bpy.types.Operator):
 
         part_objs = create_part_meshes(tmp_obj, part_vertices, tmp_col)
 
+        # 在场景切换前获取首尾帧，否则切换后将变为默认值
+        frame_start = context.scene.frame_start
+        frame_end = context.scene.frame_end
         # 保存原场景
-        original_scene = bpy.context.scene
+        original_scene = context.scene
         # 新建空白场景，避免 Dependency graph 计算
         bpy.ops.scene.new(type='NEW')
         tmp_scene = bpy.context.scene
         # 恢复集合及内部网格的显示
         get_collection(TMP_ANALYSIS_COLLECTION_NAME)
 
-        pairs = [
-            (part_objs.get("HAND"), part_objs.get("TORSO")),
-            (part_objs.get("FOREARM"), part_objs.get("TORSO")),
-            (part_objs.get("UPPER_ARM"), part_objs.get("TORSO")),
+        pair_map = OrderedDict({
+            "手部-躯干": ("HAND", "TORSO"),
+            "手部-下肢": ("HAND", "LOWER_LIMBS"),
+            "手部-头部": ("HAND", "HEAD"),
+            "手部-大臂": ("HAND", "UPPER_ARM"),
 
-            (part_objs.get("HAND"), part_objs.get("LOWER_LIMBS")),
-            (part_objs.get("FOREARM"), part_objs.get("LOWER_LIMBS")),
-            (part_objs.get("UPPER_ARM"), part_objs.get("LOWER_LIMBS")),
+            "小臂-躯干": ("FOREARM", "TORSO"),
+            "小臂-下肢": ("FOREARM", "LOWER_LIMBS"),
+            "小臂-头部": ("FOREARM", "HEAD"),
 
-            (part_objs.get("HAND"), part_objs.get("HEAD")),
-            (part_objs.get("FOREARM"), part_objs.get("HEAD")),
-            (part_objs.get("UPPER_ARM"), part_objs.get("HEAD")),
+            # "大臂-躯干": ("UPPER_ARM", "TORSO"),
+            # "大臂-下肢": ("UPPER_ARM", "LOWER_LIMBS"),
+            # "大臂-头部": ("UPPER_ARM", "HEAD"),
+        })
+        pair_key_map = {
+            (part_objs.get(a), part_objs.get(b)): key
+            for key, (a, b) in pair_map.items()
+        }
+        pairs = list(pair_key_map.keys())
 
-            (part_objs.get("HAND"), part_objs.get("UPPER_ARM"))
-        ]
+        result = detect_collisions_between_objects(pairs, frame_start, frame_end, pair_names=pair_key_map)
 
-        detect_collisions_between_objects(pairs, 1, 250)
-        print(f"总耗时: {time.perf_counter() - start_time:.4f} 秒")
+        # 注意要用 original_scene：上面 scene.new 之后当前场景已经变了
+        props = original_scene.mmd_motion_tools_detect_clipping
+        props.clippings.clear()
+        total_frames = 0
+        for (seg_start, seg_end), names in result.items():
+            item = props.clippings.add()
+            item.start = seg_start
+            item.end = seg_end
+            item.types = ", ".join(names)
+            total_frames += seg_end - seg_start + 1
+
+        if not result:
+            self.report({'INFO'}, '未检测到穿模!')
+        else:
+            self.report({'INFO'},
+                        f'检测到 {len(result)} 段穿模，共 {total_frames} 帧')
 
         # 恢复原场景并删除临时场景
         bpy.context.window.scene = original_scene
         bpy.data.scenes.remove(tmp_scene)
+
+        print(f"总耗时: {time.perf_counter() - start_time:.4f} 秒")
         return True
+
+
+class ClearClippingOperator(bpy.types.Operator):
+    bl_idname = "mmd_motion_tools.clear_clipping"
+    bl_label = "清除"
+    bl_description = "清除穿模检测结果"
+    bl_options = {'UNDO'}
+
+    def execute(self, context):
+        props = context.scene.mmd_motion_tools_detect_clipping
+        props.clippings.clear()
+        return {'FINISHED'}
 
 
 def apply_shape_key_mix(obj):
@@ -503,7 +540,7 @@ def get_bvh_for(obj, depsgraph):
 
 
 @timeit
-def detect_collisions_between_objects(pairs, start, end):
+def detect_collisions_between_objects(pairs, start, end, merge_on_type_change=True, pair_names=None):
     """
     逐帧检测各部件代理网格之间是否相交
 
@@ -513,7 +550,9 @@ def detect_collisions_between_objects(pairs, start, end):
         把那 250 个网格全删掉后再 frame_set          0.318 s   ← 理论上限
     """
     scene = bpy.context.scene
-    results = {pair: [] for pair in pairs}
+
+    # 逐帧结果：frame -> 穿模类型（同一帧只记第一个出现的穿模类型）
+    frame_hits = {}
 
     for frame in range(start, end + 1):
         # 直接修改scene.frame_current确实不会触发完整的数据更新，但frame_set()的开销太大，而在当前场景下，两者获取的数据一致。
@@ -538,15 +577,36 @@ def detect_collisions_between_objects(pairs, start, end):
                 bvh_cache[obj_b.name] = tree_b
 
             if tree_a.overlap(tree_b):
-                results[(obj_a, obj_b)].append((frame, "Collision"))
+                name = pair_names.get((obj_a, obj_b)) if pair_names else None
+                frame_hits[frame] = name
                 break
 
-    for (obj_a, obj_b), events in results.items():
-        if events:
-            print(f"\n{obj_a.name} ↔ {obj_b.name}")
-            for frame, typ in events:
-                print(f"  Frame {frame}: {typ}")
-        else:
-            print(f"\n{obj_a.name} ↔ {obj_b.name}: No collisions or proximities detected.")
+    merged = {}
+    seg_start = None
+    seg_end = None
+    seg_names = None
 
-    return results
+    # 合并连续帧：把 {frame: 名称} 压成 {(start, end): [名称]}
+    for frame in sorted(frame_hits):
+        name = frame_hits[frame]
+
+        # 能接上的条件：帧号连续，且（允许换类型 或 类型和当前区间一致）
+        if seg_start is not None and frame == seg_end + 1 and (merge_on_type_change or seg_names == [name]):
+            seg_end = frame
+            # 换类型时把新类型也收进这个区间的列表
+            if name not in seg_names:
+                seg_names.append(name)
+            continue
+
+        # 接不上，先把上一个区间收尾
+        if seg_start is not None:
+            merged[(seg_start, seg_end)] = seg_names
+
+        seg_start = frame
+        seg_end = frame
+        seg_names = [name]
+
+    if seg_start is not None:
+        merged[(seg_start, seg_end)] = seg_names
+
+    return merged

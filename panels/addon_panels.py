@@ -1,6 +1,6 @@
 from ..operators.bone_operators import SimplifyBoneOperator, FlipPoseOperator
 from ..operators.camera_motion_fixer_operators import FindCameraSegmentOperator, CameraMotionFixerOperator
-from ..operators.clipping_detection_operators import ClippingDetectionOperator
+from ..operators.clipping_detection_operators import ClippingDetectionOperator, ClearClippingOperator
 from ..operators.motion_fixer_operators import MotionFixerOperator, SyncRangeOperator, RemoveOuterKeyframesOperator, \
     RemoveInnerKeyframesOperator, DeselectKeyframesOperator
 from ..operators.utility_operators import ImportVmdPhysicsOperator, RemovePhysicalBoneAnimationOperator, \
@@ -123,6 +123,11 @@ class ClippingDetection_PT_Panel(bpy.types.Panel):
         col.prop(props, "proxy_accuracy")
         col.operator(ClippingDetectionOperator.bl_idname, text=ClippingDetectionOperator.bl_label)
 
+        if len(props.clippings) != 0:
+            rows = min(len(props.clippings), 20)
+            col.template_list("MMD_UL_ClippingRange", "", props, "clippings", props, "clipping_index", rows=rows)
+            col.operator(ClearClippingOperator.bl_idname, text=ClearClippingOperator.bl_label)
+
 
 
 class MotionFixer_PT_Panel(bpy.types.Panel):
@@ -219,6 +224,47 @@ class AboutPanel(bpy.types.Panel):
             text='版本号：' + str([addon.bl_info.get('version', (-1, -1, -1)) for addon in addon_utils.modules() if
                                   addon.bl_info['name'] == 'MMD Motion Tools'][0]))
         col.label(text='作者：KafeiMMD')
+
+
+class MMD_UL_ClippingRange(bpy.types.UIList):
+    """穿模检测结果列表"""
+
+    def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
+        frame = context.scene.frame_current
+        row = layout.row(align=True)
+        split = row.split(factor=0.8, align=True)
+
+        # 当前帧落在这一段的区间内时加个标记，方便对照视图
+        active = item.start <= frame <= item.end
+
+        subrow = split.row(align=True)
+        subrow.operator("mmd_motion_tools.jump_frame", text=str(item.start)).frame = item.start
+        subrow.operator("mmd_motion_tools.jump_frame", text=str(item.end)).frame = item.end
+
+        icons = set()
+        for item_type in item.types.split(","):
+            part = item_type.strip().split("-")[0]
+            if "手部" in part:
+                icons.add("VIEW_PAN")
+            elif "小臂" in part:
+                icons.add("MESH_CAPSULE")
+            else:
+                icons.add("MODIFIER_ON")
+
+        # 右侧：图标
+        subrow = split.row(align=True)
+        # 始终按指定顺序显示
+        if "VIEW_PAN" in icons:
+            subrow.label(text="", icon="VIEW_PAN")
+        else:
+            subrow.label(text="", icon="BLANK1")
+
+        if "MESH_CAPSULE" in icons:
+            subrow.label(text="", icon="MESH_CAPSULE")
+        else:
+            subrow.label(text="", icon="BLANK1")
+
+
 
 
 class MMD_UL_RepeatedRange(bpy.types.UIList):
