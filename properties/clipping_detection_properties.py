@@ -11,6 +11,28 @@ def reset_clipping_index(scene, depsgraph):
         props.clipping_index = -1
 
 
+def sync_custom_detection_range(props):
+    """「自定义拓展」从空变为有值时，自动勾上检测范围里所有含「自定义拓展」的项"""
+    if not props.custom_bones_str.strip():
+        return
+
+    enum_items = props.bl_rna.properties["detection_range"].enum_items
+    custom_keys = {
+        item.identifier
+        for item in enum_items
+        if item.identifier.endswith("-CUSTOM")
+    }
+    if not custom_keys:
+        return
+
+    current = set(props.detection_range)
+    # 判断 custom_keys 是否是 current 的子集
+    if custom_keys <= current:
+        return
+
+    props.detection_range = current | custom_keys
+
+
 class ClippingRangeItem(bpy.types.PropertyGroup):
     """一段连续的穿模区间"""
     start: bpy.props.IntProperty(name="起始帧")
@@ -74,6 +96,7 @@ class ClippingDetectionProperty(bpy.types.PropertyGroup):
         description="通过额外的骨骼名称，扩展检测范围中的「自定义拓展」部件\n"
                     "在此处输入骨骼名称，并以中文逗号或英文逗号作为分隔",
         default="",
+        update=lambda self, context: sync_custom_detection_range(self),
     )
 
     # 是否在面板上显示「检测范围」
