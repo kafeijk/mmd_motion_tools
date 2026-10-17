@@ -44,6 +44,17 @@ BONE_PATH_PREFIX = 'pose.bones["'
 # 骨架对象上保存骨骼原始显示/隐藏状态的自定义属性名
 ORIGINAL_BONE_HIDE_PROP = 'mmd_motion_tools_original_bone_hide'
 
+BREAST_BONE_PATTERN = re.compile(
+    r'^胸'  # 开头必须是“胸”
+    r'([_上下前後先間親亲変形回転支え基W筋]*)'
+    r'([0-9０-９])?'  # 可选的单独数字（半角或全角）
+    r'([錘先D])?'
+    r'(\.\d{3})?'  # 可选的前置序号
+    r'(\.[LR])?'  # 可选的左右标识
+    r'(\.\d{3})?'  # 可选的后置序号
+    r'$'
+)
+
 
 def timeit(func):
     @functools.wraps(func)
@@ -1313,3 +1324,7 @@ def select_only_objects(context, objects):
     except RuntimeError:
         # RuntimeError: 错误: 物体 'xxx' 不在视图层 'ViewLayer'中, 所以无法选中!
         pass
+
+
+def is_dummy_bone(name):
+    return name.startswith("_dummy_") or name.startswith("_shadow_")

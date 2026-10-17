@@ -1,3 +1,4 @@
+import copy
 from collections import OrderedDict
 
 import mathutils
@@ -99,8 +100,11 @@ class ClippingDetectionOperator(bpy.types.Operator):
         key_pointers_before = {key.as_pointer() for key in bpy.data.shape_keys}
         tmp_obj = create_tmp_obj(context, objects, tmp_col)
 
-        part_vertices = classify_vertices(tmp_obj)
-
+        breast_bones = get_breast_bones(armature)
+        bb_names = [bb.name for bb in breast_bones]
+        part_vgs = copy.deepcopy(PART_VGS)
+        part_vgs["BREAST"] = bb_names
+        part_vertices = classify_vertices(tmp_obj, part_vgs)
         part_objs = create_part_meshes(props, tmp_obj, part_vertices, tmp_col)
 
         # 在场景切换前获取首尾帧，否则切换后将变为默认值
@@ -119,10 +123,12 @@ class ClippingDetectionOperator(bpy.types.Operator):
             "手部-下肢": ("HAND", "LOWER_LIMBS"),
             "手部-头部": ("HAND", "HEAD"),
             "手部-大臂": ("HAND", "UPPER_ARM"),
+            "手部-胸部": ("HAND", "BREAST"),
 
             "小臂-躯干": ("FOREARM", "TORSO"),
             "小臂-下肢": ("FOREARM", "LOWER_LIMBS"),
             "小臂-头部": ("FOREARM", "HEAD"),
+            "小臂-胸部": ("FOREARM", "BREAST"),
 
             # "大臂-躯干": ("UPPER_ARM", "TORSO"),
             # "大臂-下肢": ("UPPER_ARM", "LOWER_LIMBS"),
@@ -317,15 +323,15 @@ def create_tmp_obj(context, objects, tmp_col):
 
 
 @timeit
-def classify_vertices(obj, threshold=0.25):
+def classify_vertices(obj, part_vgs,threshold=0.25):
     """
     按顶点组权重把顶点归类到身体部件
 
     规则：把一个顶点在「同一部件内的所有顶点组」上的权重加起来，
-    取第一个（按 PART_VGS 顺序）总和超过 threshold 的部件。
+    取第一个（按 part_vgs 顺序）总和超过 threshold 的部件。
     每个顶点最多归入一个部件。
     """
-    part_names = list(PART_VGS.keys())
+    part_names = list(part_vgs.keys())
     part_count = len(part_names)
 
     # 顶点组名称 -> 顶点组索引（顶点组索引是从 0 开始的连续整数）
@@ -336,10 +342,10 @@ def classify_vertices(obj, threshold=0.25):
 
     # 建查表：顶点组索引 -> 所属部件序号。
     # 用列表而不是字典，因为顶点组索引本身就是连续整数，列表查表更快。
-    # 前提：PART_VGS 里各部件的顶点组互不重叠，一个顶点组只属于一个部件。
+    # 前提：part_vgs 里各部件的顶点组互不重叠，一个顶点组只属于一个部件。
     table_size = max(vertex_groups.values(), default=-1) + 1
     vg_to_part = [-1] * table_size  # -1 = 这个顶点组不属于任何关注的部件
-    for part_index, vg_names in enumerate(PART_VGS.values()):
+    for part_index, vg_names in enumerate(part_vgs.values()):
         for name in vg_names:
             vg_index = vertex_groups.get(name)
             if vg_index is not None:
@@ -539,7 +545,7 @@ def create_part_meshes(props, obj, part_vertices, col):
     # ------------------------------------------------------------------
     proxy_accuracy = props.proxy_accuracy
     for part_obj in part_objs.values():
-        vertex_count = len(part_obj.data.vertices)
+        face_count = len(part_obj.data.polygons)
 
         select_only_objects(bpy.context, [part_obj])
         m_name = "Decimate"
@@ -549,9 +555,9 @@ def create_part_meshes(props, obj, part_vertices, col):
         if proxy_accuracy == "FULL":
             modifier.ratio = 1
         elif proxy_accuracy == "BALANCED":
-            modifier.ratio = min(2000 / vertex_count, 1)
+            modifier.ratio = min(2000 / face_count, 1)
         else:
-            modifier.ratio = min(500 / vertex_count, 1)
+            modifier.ratio = min(500 / face_count, 1)
 
         modifier.use_symmetry = True
         bpy.ops.object.modifier_apply(modifier=m_name)
@@ -721,3 +727,58 @@ def detect_collisions_between_objects(pairs, start, end, merge_on_type_change=Tr
         merged[(seg_start, seg_end)] = seg_names
 
     return merged
+
+
+def get_breast_bones(armature):
+    """获取胸部骨骼列表
+    """
+    breast_bones = []
+    for b in armature.data.bones:
+        b_name = b.name
+        if is_dummy_bone(b_name):
+            continue
+        match = BREAST_BONE_PATTERN.match(b_name)
+        if match:
+            breast_bones.append(b)
+            continue
+
+    # 需要停止查找子级时命中的骨骼名称
+    STOP_NAMES = {"首", "肩P.L", "肩.L", "肩P.R", "肩.R"}
+
+    # 找到“上半身2”“上半身3”的骨骼
+    upper_bones = [
+        b for b in armature.data.bones
+        if b.name in ("上半身2", "上半身3")
+    ]
+
+    # 记录已经收集的骨骼，避免重复
+    collected = set(breast_bones)
+
+    def collect_descendants(parent_bone, upper_bones):
+        """递归收集符合条件的子孙节点"""
+        for child in parent_bone.children:
+            c_name = child.name
+            if is_dummy_bone(c_name):
+                continue
+            # 遇到停止名称则不再深入
+            if c_name in STOP_NAMES:
+                continue
+            # 子级骨骼的 tail 必须在所有上半身骨骼 head/tail 的 y 更小（更靠前）才会继续
+            child_tail_y = child.tail_local.y
+            if not all(
+                child_tail_y < ub.head_local.y and child_tail_y < ub.tail_local.y
+                for ub in upper_bones
+            ):
+                continue
+
+            if child not in collected:
+                breast_bones.append(child)
+                collected.add(child)
+
+            # 继续寻找子孙节点
+            collect_descendants(child, upper_bones)
+
+    for ub in upper_bones:
+        collect_descendants(ub, upper_bones)
+
+    return breast_bones
