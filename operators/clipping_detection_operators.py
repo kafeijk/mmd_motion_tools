@@ -72,25 +72,61 @@ class ClippingDetectionOperator(bpy.types.Operator):
     bl_options = {'REGISTER', 'UNDO'}
 
     def check_props(self, context):
-        return True
+        if not is_mmd_tools_enabled():
+            self.report({'ERROR'}, '未启用mmd_tools插件！')
+            return None
+
+        obj = context.active_object
+        if obj is None:
+            self.report({'ERROR'}, '请选择MMD模型！')
+            return None
+
+        root = find_pmx_root_with_child(obj)
+        if root is None:
+            self.report({'ERROR'}, '请选择MMD模型！')
+            return None
+
+        armature = find_pmx_armature(root)
+        if armature is None:
+            self.report({'ERROR'}, '未检测到骨架！')
+            return None
+
+        objects = find_pmx_objects(armature)
+        if not objects:
+            self.report({'ERROR'}, '未检测到网格！')
+            return None
+
+        # 没有骨架修改器的网格不会跟随动作，检测结果没有意义
+        if not any(modifier.type == 'ARMATURE' for mesh_obj in objects for modifier in mesh_obj.modifiers):
+            self.report({'ERROR'}, '网格未绑定骨架修改器！')
+            return None
+
+        # 顶点组是划分身体部件的依据，一个都没有就分不出任何部件
+        if not any(mesh_obj.vertex_groups for mesh_obj in objects):
+            self.report({'ERROR'}, '网格不存在顶点组！')
+            return None
+
+        props = context.scene.mmd_motion_tools_detect_clipping
+        if not props.detection_range:
+            self.report({'ERROR'}, '请至少选择一项检测范围！')
+            return None
+
+        return armature, objects
 
     def execute(self, context):
         result = self.check_props(context)
         if result is None:
             return {'CANCELLED'}
 
-        if not self.detect_clipping(context):
+        armature, objects = result
+        if not self.detect_clipping(context, armature, objects):
             return {'CANCELLED'}
 
         return {'FINISHED'}
 
-    def detect_clipping(self, context):
+    def detect_clipping(self, context, armature, objects):
         start_time = time.perf_counter()
         props = context.scene.mmd_motion_tools_detect_clipping
-
-        root = find_pmx_root()
-        armature = find_pmx_armature(root)
-        objects = find_pmx_objects(armature)
 
         tmp_col = get_collection(TMP_ANALYSIS_COLLECTION_NAME)
         # 先按对象上的标记清一次
