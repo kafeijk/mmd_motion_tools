@@ -121,6 +121,9 @@ class ClippingDetection_PT_Panel(bpy.types.Panel):
             sub.prop(scene, "frame_start", text="时间范围")
             sub.prop(scene, "frame_end", text="")
         col.prop(props, "proxy_accuracy")
+        if props.show_detection_range:
+            col.prop(props, "detection_range")
+        col.prop(props, "show_detection_range")
         col.prop(props, "remove_tmp")
         col.operator(ClippingDetectionOperator.bl_idname, text=ClippingDetectionOperator.bl_label)
 
@@ -245,12 +248,12 @@ class MMD_UL_ClippingRange(bpy.types.UIList):
         icons = set()
         for item_type in item.types.split(","):
             part = item_type.strip().split("-")[0]
-            if "手部" in part:
+            if "HAND" in part:
                 icons.add("VIEW_PAN")
-            elif "小臂" in part:
+            elif "FOREARM" in part:
                 icons.add("MESH_CAPSULE")
             else:
-                icons.add("MODIFIER_ON")
+                pass
 
         # 右侧：图标
         subrow = split.row(align=True)

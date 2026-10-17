@@ -3,6 +3,7 @@ from collections import OrderedDict
 
 import mathutils
 
+from ..properties.clipping_detection_properties import get_ordered_detection_range
 from ..utils import *
 
 # 手（手首+手指） - 躯干（上半身+下半身+上半身2+胸部）
@@ -118,26 +119,12 @@ class ClippingDetectionOperator(bpy.types.Operator):
         # 恢复集合及内部网格的显示
         get_collection(TMP_ANALYSIS_COLLECTION_NAME)
 
-        pair_map = OrderedDict({
-            "手部-躯干": ("HAND", "TORSO"),
-            "手部-下肢": ("HAND", "LOWER_LIMBS"),
-            "手部-头部": ("HAND", "HEAD"),
-            "手部-大臂": ("HAND", "UPPER_ARM"),
-            "手部-胸部": ("HAND", "BREAST"),
+        detection_range = get_ordered_detection_range(props)
+        pair_key_map = {}
+        for r in detection_range:
+            a, b = r.split("-")
+            pair_key_map[(part_objs.get(a), part_objs.get(b))] = r
 
-            "小臂-躯干": ("FOREARM", "TORSO"),
-            "小臂-下肢": ("FOREARM", "LOWER_LIMBS"),
-            "小臂-头部": ("FOREARM", "HEAD"),
-            "小臂-胸部": ("FOREARM", "BREAST"),
-
-            # "大臂-躯干": ("UPPER_ARM", "TORSO"),
-            # "大臂-下肢": ("UPPER_ARM", "LOWER_LIMBS"),
-            # "大臂-头部": ("UPPER_ARM", "HEAD"),
-        })
-        pair_key_map = {
-            (part_objs.get(a), part_objs.get(b)): key
-            for key, (a, b) in pair_map.items()
-        }
         pairs = list(pair_key_map.keys())
 
         result = detect_collisions_between_objects(pairs, frame_start, frame_end, pair_names=pair_key_map)
@@ -323,7 +310,7 @@ def create_tmp_obj(context, objects, tmp_col):
 
 
 @timeit
-def classify_vertices(obj, part_vgs,threshold=0.25):
+def classify_vertices(obj, part_vgs, threshold=0.25):
     """
     按顶点组权重把顶点归类到身体部件
 
@@ -571,6 +558,7 @@ def create_part_meshes(props, obj, part_vertices, col):
     bpy.data.objects.remove(obj, do_unlink=True)
     return part_objs
 
+
 @timeit
 def remove_part_meshes(tmp_col, tmp_objs=None, remove_empty_collection=False):
     """删除穿模检测用的临时网格对象"""
@@ -612,6 +600,7 @@ def remove_part_meshes(tmp_col, tmp_objs=None, remove_empty_collection=False):
     if is_empty:
         bpy.data.collections.remove(tmp_col)
 
+
 @timeit
 def purge_temp_datablocks(mesh_pointers_before=None, key_pointers_before=None):
     """
@@ -642,7 +631,7 @@ def purge_temp_datablocks(mesh_pointers_before=None, key_pointers_before=None):
     leftover_keys = [
         key for key in bpy.data.shape_keys
         if key.as_pointer() not in key_pointers_before
-        and key.as_pointer() not in used_keys
+           and key.as_pointer() not in used_keys
     ]
     if leftover_keys:
         # bpy.data.shape_keys 没有 remove() 方法（Key 属于特殊类型的数据块），
@@ -766,8 +755,8 @@ def get_breast_bones(armature):
             # 子级骨骼的 tail 必须在所有上半身骨骼 head/tail 的 y 更小（更靠前）才会继续
             child_tail_y = child.tail_local.y
             if not all(
-                child_tail_y < ub.head_local.y and child_tail_y < ub.tail_local.y
-                for ub in upper_bones
+                    child_tail_y < ub.head_local.y and child_tail_y < ub.tail_local.y
+                    for ub in upper_bones
             ):
                 continue
 
