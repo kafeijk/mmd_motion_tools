@@ -59,6 +59,9 @@ PART_VGS = OrderedDict({
 
 TMP_ANALYSIS_COLLECTION_NAME = "穿模检测临时集合"
 
+# 临时对象的标记属性
+TMP_OBJECT_TAG = "mmd_motion_tools_tmp"
+
 
 class ClippingDetectionOperator(bpy.types.Operator):
     bl_idname = "mmd_motion_tools.detect_clipping"
@@ -88,6 +91,12 @@ class ClippingDetectionOperator(bpy.types.Operator):
         objects = find_pmx_objects(armature)
 
         tmp_col = get_collection(TMP_ANALYSIS_COLLECTION_NAME)
+        # 先按对象上的标记清一次
+        remove_part_meshes(tmp_col)
+        # 记录执行前已有的网格、形态键数据块：后面清理临时对象时，只清理本次新建的，
+        # 不会误删用户自己留在文件里的孤立数据
+        mesh_pointers_before = {mesh.as_pointer() for mesh in bpy.data.meshes}
+        key_pointers_before = {key.as_pointer() for key in bpy.data.shape_keys}
         tmp_obj = create_tmp_obj(context, objects, tmp_col)
 
         part_vertices = classify_vertices(tmp_obj)
@@ -147,6 +156,12 @@ class ClippingDetectionOperator(bpy.types.Operator):
         # 恢复原场景并删除临时场景
         bpy.context.window.scene = original_scene
         bpy.data.scenes.remove(tmp_scene)
+
+        # 临时部件代理网格按开关删除；中间产生的孤立数据块每次都要清，
+        # 因为代理网格里已经不含形态键，留着也不会被用到
+        if props.remove_tmp:
+            remove_part_meshes(tmp_col, part_objs.values(), True)
+        purge_temp_datablocks(mesh_pointers_before, key_pointers_before)
 
         print(f"总耗时: {time.perf_counter() - start_time:.4f} 秒")
         return True
@@ -276,6 +291,8 @@ def create_tmp_obj(context, objects, tmp_col):
     copied_objs = []
     for obj in objects:
         copied_obj = copy_obj(obj, tmp_col)
+        # 打上临时对象标记，join 之后标记会留在合并后的对象上
+        copied_obj[TMP_OBJECT_TAG] = True
         copied_objs.append(copied_obj)
 
     ensure_object_mode(context)
@@ -294,6 +311,8 @@ def create_tmp_obj(context, objects, tmp_col):
         bpy.ops.object.join()
 
     tmp_obj = context.view_layer.objects.active
+    # join 之后标记应该已经在活动对象上了，这里再确保一次（只 join 一个对象时同理）
+    tmp_obj[TMP_OBJECT_TAG] = True
     return tmp_obj
 
 
@@ -495,6 +514,8 @@ def create_part_meshes(props, obj, part_vertices, col):
         mesh.update()
 
         part_obj = bpy.data.objects.new(f"{part}", mesh)
+        # 打上临时对象标记
+        part_obj[TMP_OBJECT_TAG] = True
         col.objects.link(part_obj)
         part_obj.matrix_world = obj.matrix_world.copy()
 
@@ -543,6 +564,85 @@ def create_part_meshes(props, obj, part_vertices, col):
 
     bpy.data.objects.remove(obj, do_unlink=True)
     return part_objs
+
+@timeit
+def remove_part_meshes(tmp_col, tmp_objs=None, remove_empty_collection=False):
+    """删除穿模检测用的临时网格对象"""
+    targets = []
+    seen = set()
+
+    for part_obj in tmp_objs or ():
+        if part_obj is None:
+            continue
+        pointer = part_obj.as_pointer()
+        if pointer not in seen:
+            seen.add(pointer)
+            targets.append(part_obj)
+
+    # 兜底：临时集合里任何带标记的对象都算临时对象
+    for obj in tmp_col.objects:
+        if TMP_OBJECT_TAG not in obj.keys():
+            continue
+        pointer = obj.as_pointer()
+        if pointer not in seen:
+            seen.add(pointer)
+            targets.append(obj)
+
+    if targets:
+        doomed = [(obj, obj.data if obj.type == 'MESH' else None) for obj in targets]
+
+        for obj, _mesh in doomed:
+            bpy.data.objects.remove(obj, do_unlink=True)
+
+        for _obj, mesh in doomed:
+            # 删除对象不会连带删除网格数据，users 归零时手动清掉，避免残留孤儿数据
+            if mesh is not None and mesh.users == 0:
+                bpy.data.meshes.remove(mesh)
+
+    if not remove_empty_collection:
+        return
+
+    is_empty = not tmp_col.objects and not tmp_col.children
+    if is_empty:
+        bpy.data.collections.remove(tmp_col)
+
+@timeit
+def purge_temp_datablocks(mesh_pointers_before=None, key_pointers_before=None):
+    """
+    清掉检测过程中新产生、但已经没人在用的网格和形态键数据块
+
+    只处理「执行前不存在」的数据块，用户文件里原本就有的孤立数据不会被动到。
+    """
+    # 孤立网格：copy_obj 的副本、join 之后遗留的源网格
+    if mesh_pointers_before is not None:
+        leftover_meshes = [
+            mesh for mesh in bpy.data.meshes
+            if mesh.as_pointer() not in mesh_pointers_before and mesh.users == 0
+        ]
+        for mesh in leftover_meshes:
+            bpy.data.meshes.remove(mesh)
+
+    if key_pointers_before is None:
+        return
+
+    # 形态键（Key）不能用 users == 0 判断：Blender 给 Key 这类数据块固定算了
+    # 一个「自带用户」，所以 shape_key_clear() 之后它的 users 仍然显示 1，
+    # 只能反过来看还有没有网格的 shape_keys 指向它。
+    used_keys = {
+        mesh.shape_keys.as_pointer()
+        for mesh in bpy.data.meshes
+        if mesh.shape_keys is not None
+    }
+    leftover_keys = [
+        key for key in bpy.data.shape_keys
+        if key.as_pointer() not in key_pointers_before
+        and key.as_pointer() not in used_keys
+    ]
+    if leftover_keys:
+        # bpy.data.shape_keys 没有 remove() 方法（Key 属于特殊类型的数据块），
+        # 只能走 batch_remove
+        # https://docs.blender.org/api/current/bpy.types.BlendData.html#bpy.types.BlendData.batch_remove
+        bpy.data.batch_remove(ids=leftover_keys)
 
 
 def get_bvh_for(obj, depsgraph):

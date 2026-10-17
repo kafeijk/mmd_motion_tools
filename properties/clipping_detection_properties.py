@@ -32,6 +32,13 @@ class ClippingDetectionProperty(bpy.types.PropertyGroup):
         default="BALANCED",
     )
 
+    # 检测结束后是否删掉临时生成的部件代理网格
+    remove_tmp: bpy.props.BoolProperty(
+        name="删除临时对象",
+        description="删除临时对象",
+        default=True
+    )
+
     # 穿模检测结果
     clippings: bpy.props.CollectionProperty(
         type=ClippingRangeItem

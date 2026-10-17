@@ -121,6 +121,7 @@ class ClippingDetection_PT_Panel(bpy.types.Panel):
             sub.prop(scene, "frame_start", text="检测范围")
             sub.prop(scene, "frame_end", text="")
         col.prop(props, "proxy_accuracy")
+        col.prop(props, "remove_tmp")
         col.operator(ClippingDetectionOperator.bl_idname, text=ClippingDetectionOperator.bl_label)
 
         if len(props.clippings) != 0:
