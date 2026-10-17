@@ -115,7 +115,6 @@ class ClippingDetection_PT_Panel(bpy.types.Panel):
         layout.use_property_decorate = False
         col = layout.column()
 
-        col.prop(props, "mode")
         sub = col.row(align=True)
         sub.scale_x = 0.8
         if not scene.use_preview_range:

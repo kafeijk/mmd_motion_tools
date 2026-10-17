@@ -2,15 +2,6 @@ from ..utils import *
 
 
 class ClippingDetectionProperty(bpy.types.PropertyGroup):
-    mode: bpy.props.EnumProperty(
-        name="检测模式",
-        description="检测模式",
-        items=[
-            ("DEFAULT", "默认", "适用于骨架驱动网格的情形"),
-            ("OTHER", "其它", "适用于缓存等其它方式驱动网格的情形"),
-        ],
-        default="DEFAULT",
-    )
     proxy_accuracy: bpy.props.EnumProperty(
         name="代理精度",
         description="代理网格的精度比例",
