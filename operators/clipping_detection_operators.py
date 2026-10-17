@@ -308,73 +308,187 @@ def classify_vertices(obj, threshold=0.25):
 
 @timeit
 def create_part_meshes(obj, part_vertices, col):
+    """
+    把临时网格按身体部件拆成多个代理网格
+
+    1. 每个部件各建一个网格，只包含属于该部件的顶点和面
+    2. 把原始网格的顶点组权重抄过去（这样骨架修改器才能正常带动代理网格）
+    3. 用 Decimate 减面（用于加速后续碰撞检测）
+    4. 把原始网格的 mmd_armature 修改器复制给每个代理网格
+    """
+    # 延迟导入，避免拖慢插件加载速度
+    import numpy as np
+
+    part_names = [part for part, indices in part_vertices.items() if indices]
+    if not part_names:
+        return {}
+
+    ensure_object_mode(bpy.context)
+
+    src_mesh = obj.data
+    vertex_count = len(src_mesh.vertices)
+    part_index_of = {part: i for i, part in enumerate(part_names)}
+
+    # ------------------------------------------------------------------
+    # 1. 建两张查表：旧顶点索引 -> 新顶点索引，顶点 -> 所属部件序号
+    # ------------------------------------------------------------------
+    # np.full(顶点数, -1)：先全部填 -1，表示「还没分配 / 不属于任何部件」
+    old_to_new = np.full(vertex_count, -1, dtype=np.int32)
+    vertex_to_part = np.full(vertex_count, -1, dtype=np.int32)
+    part_indices = []
+    for part in part_names:
+        # classify_vertices 给的是 Python 列表，转成 numpy 数组才能做向量化运算
+        indices = np.asarray(part_vertices[part], dtype=np.int32)
+        part_indices.append(indices)
+        # 新网格里顶点是连续编号 0,1,2,...，所以「旧索引 -> 新索引」就是
+        # 把这些旧索引位置上的值依次填成 0,1,2,...。
+        # 例：indices = [7, 3, 9]  =>  old_to_new[7]=0, old_to_new[3]=1, old_to_new[9]=2
+        old_to_new[indices] = np.arange(len(indices), dtype=np.int32)
+        # 同时记下这些顶点属于第几个部件
+        vertex_to_part[indices] = part_index_of[part]
+
+    # ------------------------------------------------------------------
+    # 2. 一次性把坐标和拓扑读成 numpy 数组
+    # ------------------------------------------------------------------
+    # 后面全靠数组切片，不再逐个访问 obj.data.vertices / polygons（那个很慢）
+    all_coords = np.empty(vertex_count * 3, dtype=np.float32)
+    src_mesh.vertices.foreach_get("co", all_coords)
+    all_coords = all_coords.reshape(vertex_count, 3)  # 摊平成 (顶点数, 3)
+
+    # 2 ─ 7 ─ 3
+    # │   │   │
+    # 4 ─ 8 ─ 6
+    # │   │   │
+    # 0 ─ 5 ─ 1
+    # 例如一个平面由四个四边面构成。                         loop为面角，例如一个顶点在不同面上可以有不同的UV位置
+    # loop_verts:[8 6 3 7 4 8 7 2 0 5 8 4 5 1 6 8]     构成loop的顶点
+    # loop_starts:[ 0  4  8 12]                        每个面第一个loop对应索引
+    # loop_totals:[4 4 4 4]                            面的loop数量
+    polygon_count = len(src_mesh.polygons)
+    loop_count = len(src_mesh.loops)
+    loop_verts = np.empty(loop_count, dtype=np.int32)
+    src_mesh.loops.foreach_get("vertex_index", loop_verts)
+    loop_starts = np.empty(polygon_count, dtype=np.int32)
+    src_mesh.polygons.foreach_get("loop_start", loop_starts)
+    loop_totals = np.empty(polygon_count, dtype=np.int32)
+    src_mesh.polygons.foreach_get("loop_total", loop_totals)
+
+    # ------------------------------------------------------------------
+    # 3. 判断每个多边形属于哪个部件
+    # ------------------------------------------------------------------
+    # 规则：一个多边形的所有顶点都落在同一个部件里时，它才属于那个部件。
+    #
+    # 做法：先算出每个 loop 的顶点属于哪个部件，然后按多边形分组求「最小/最大部件号」。
+    # 如果某个多边形的 min == max，说明它所有顶点都在同一个部件；
+    # 如果 min != max（比如一个面横跨 TORSO 和 UPPER ARM），就说明这个面要被丢掉。
+    #
+    # loop_verts 是「每个 loop 对应哪个顶点」，vertex_to_part 是「每个顶点属于哪个部件」，
+    # 那么 vertex_to_part[loop_verts] 就是「每个 loop 属于哪个部件」——
+    # 这一行就叫「按索引取数」，一次把 76 万个 loop 全部算完。
+    # 按照loop_verts中的索引值，从vertex_to_part中批量取值，生成一个新数组。
+    part_of_loop = vertex_to_part[loop_verts]
+
+    # 例：
+    # poly_min:[0 0 0 0]
+    # poly_max:[2 2 3 3]
+    # poly_part:[-1 -1 -1 -1]
+    # reduceat 按 loop_starts 把 part_of_loop 分段，每段求最小值/最大值。
+    poly_min = np.minimum.reduceat(part_of_loop, loop_starts)
+    poly_max = np.maximum.reduceat(part_of_loop, loop_starts)
+    # np.where(条件, 条件成立时的值, 条件不成立时的值)
+    poly_part = np.where(poly_min == poly_max, poly_min, -1)
+
+    # 再建一张「每个 loop 属于第几个多边形」的表，用来一次性筛出某个部件的所有面。
+    # np.repeat([0,1,2,...], loop_totals)：第 p 个多边形有几个 loop，就把 p 重复几次
+    # loop_totals:[4 4 4 4]
+    # polygon_count:4
+    # poly_of_loop = np.array([
+    #     0, 0, 0, 0,
+    #     1, 1, 1, 1,
+    #     2, 2, 2, 2,
+    #     3, 3, 3, 3
+    # ])
+    poly_of_loop = np.repeat(np.arange(polygon_count, dtype=np.int32), loop_totals)
+    # 于是 poly_part[poly_of_loop] 就是「每个 loop 所在的多边形属于哪个部件」
+    # 按照poly_of_loop中的索引，从poly_part中批量取值，生成一个新数组。
+    part_of_loop_by_poly = poly_part[poly_of_loop]
+
+    # ------------------------------------------------------------------
+    # 4. 逐个部件建网格
+    # ------------------------------------------------------------------
     part_objs = {}
-    for part, vertex_indices in part_vertices.items():
-        if not vertex_indices:
-            continue
+    for part_index, part in enumerate(part_names):
+        indices = part_indices[part_index]
 
-        # 旧顶点索引 -> 新顶点索引
-        index_map = {
-            old_index: new_index
-            for new_index, old_index in enumerate(vertex_indices)
-        }
+        # poly_part == part_index 是布尔数组
+        sel_polys = poly_part == part_index
+        # 从loop_totals中筛选出sel_polys为True的元素
+        counts = loop_totals[sel_polys]
 
-        # 新网格坐标
-        vert_cos = [
-            obj.data.vertices[index].co
-            for index in vertex_indices
-        ]
+        # 面的顶点：先筛出属于本部件的所有 loop，再把「旧顶点索引」换成「新顶点索引」。
+        # old_to_new[...] 就是那张查表，一次把几万个索引全部替换掉。
+        new_loops = old_to_new[loop_verts[part_of_loop_by_poly == part_index]]
 
-        faces = []
-        for polygon in obj.data.polygons:
-            # 仅保留所有顶点都属于当前部件的面
-            if not all(index in index_map for index in polygon.vertices):
-                continue
-            # 将原网格的顶点索引转换为新网格的顶点索引
-            face = [
-                index_map[index]
-                for index in polygon.vertices
-            ]
-            faces.append(face)
+        # new_loops 是一长条扁平数组，要按每个面的顶点数切开。
+        # cumsum 累积和，会从左到右，依次计算数组元素的累加结果。
+        # counts = np.array([3, 4, 4])
+        # result = np.cumsum(counts)
+        # [3, 7, 11]
+        # np.cumsum(counts)[:-1] 算出每个面的结束位置，np.split 在这些位置切开，-1表示结束的位置，所以不需要切开
+        # 例：
+        # counts = np.array([3, 4])
+        # new_loops = np.array([0, 1, 2, 3, 4, 5, 6])
+        # np.cumsum(counts) # [3, 7]
+        # np.cumsum(counts)[:-1] # [3]
+        # faces = np.split(new_loops, [3]) #[array([0, 1, 2]), array([3, 4, 5, 6])]
+        # 注意：断点数组为空时 np.split 会把整个数组当成一块返回（变成一个超大面），
+        # 所以必须判空。实测：np.split([1,2,3], []) -> [[1,2,3]]
+        if counts.size:
+            faces = np.split(new_loops, np.cumsum(counts)[:-1])
+        else:
+            faces = []
 
         mesh = bpy.data.meshes.new(f"{part}")
         # https://docs.blender.org/api/current/bpy.types.Mesh.html#bpy.types.Mesh.from_pydata
-        mesh.from_pydata(vert_cos, [], faces)
+        # tolist() 转成 Python 列表
+        mesh.from_pydata(all_coords[indices].tolist(), [], faces)
         mesh.update()
 
         part_obj = bpy.data.objects.new(f"{part}", mesh)
         col.objects.link(part_obj)
         part_obj.matrix_world = obj.matrix_world.copy()
 
-        # 复制顶点组
+        # 复制顶点组。
         for vertex_group in obj.vertex_groups:
             part_obj.vertex_groups.new(name=vertex_group.name)
 
-        # 复制顶点权重
-        for old_index, new_index in index_map.items():
-            vertex = obj.data.vertices[old_index]
-            for group in vertex.groups:
-                part_obj.vertex_groups[group.group].add(
-                    [new_index],
-                    group.weight,
-                    'REPLACE',
-                )
+        # 复制顶点权重。
+        # 关键：把每个顶点组的 add 方法先取成列表。直接写
+        # part_obj.vertex_groups[i].add(...) 每次都要做一次集合索引查找，
+        # 实测慢 3.3 倍（TORSO 单部件 0.349s -> 0.105s）。
+        adders = [vertex_group.add for vertex_group in part_obj.vertex_groups]
+        for new_index, old_index in enumerate(indices):
+            for group in src_mesh.vertices[old_index].groups:
+                adders[group.group]([new_index], group.weight, 'REPLACE')
 
         part_objs[part] = part_obj
 
+    # ------------------------------------------------------------------
+    # 5. 减面
+    # ------------------------------------------------------------------
     for part_obj in part_objs.values():
-        deselect_all_objects()
-        select_and_activate(part_obj)
+        select_only_objects(bpy.context, [part_obj])
         m_name = "Decimate"
         modifier = part_obj.modifiers.new(name=m_name, type='DECIMATE')
         modifier.decimate_type = 'COLLAPSE'
         modifier.ratio = 0.1
+        modifier.use_symmetry = True
         bpy.ops.object.modifier_apply(modifier=m_name)
 
-    deselect_all_objects()
-    for part_obj in part_objs.values():
-        select_and_activate(part_obj)
-    select_and_activate(obj)
+    # ------------------------------------------------------------------
+    # 6. 从「活动对象」复制修改器到「所有选中对象」，然后删掉临时网格
+    # ------------------------------------------------------------------
+    select_only_objects(bpy.context, list(part_objs.values()) + [obj])
     bpy.ops.object.modifier_copy_to_selected(modifier="mmd_armature")
 
     bpy.data.objects.remove(obj, do_unlink=True)
