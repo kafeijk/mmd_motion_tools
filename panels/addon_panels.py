@@ -85,7 +85,7 @@ class FindRepeatedMotion_PT_Panel(bpy.types.Panel):
         col = layout.column()
 
         if len(props.repeated) != 0:
-            rows = min(len(props.repeated), 20)
+            rows = min(len(props.repeated), 5)
             col.template_list("MMD_UL_RepeatedRange", "", props, "repeated", props, "repeated_index", rows=rows)
 
         row = col.row(align=True)
@@ -118,14 +118,14 @@ class ClippingDetection_PT_Panel(bpy.types.Panel):
         sub = col.row(align=True)
         sub.scale_x = 0.8
         if not scene.use_preview_range:
-            sub.prop(scene, "frame_start", text="检测范围")
+            sub.prop(scene, "frame_start", text="时间范围")
             sub.prop(scene, "frame_end", text="")
         col.prop(props, "proxy_accuracy")
         col.prop(props, "remove_tmp")
         col.operator(ClippingDetectionOperator.bl_idname, text=ClippingDetectionOperator.bl_label)
 
         if len(props.clippings) != 0:
-            rows = min(len(props.clippings), 20)
+            rows = min(len(props.clippings), 5)
             col.template_list("MMD_UL_ClippingRange", "", props, "clippings", props, "clipping_index", rows=rows)
             col.operator(ClearClippingOperator.bl_idname, text=ClearClippingOperator.bl_label)
 
