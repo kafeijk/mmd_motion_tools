@@ -108,6 +108,8 @@ class ClippingDetectionProperty(bpy.types.PropertyGroup):
             ("UPPER_ARM-TORSO", "大臂-躯干", "大臂-躯干"),
             ("UPPER_ARM-LOWER_LIMBS", "大臂-下肢", "大臂-下肢"),
             ("UPPER_ARM-HEAD", "大臂-头部", "大臂-头部"),
+            ("UPPER_ARM-BREAST", "大臂-胸部", "大臂-胸部"),
+            ("UPPER_ARM-CUSTOM", "大臂-自定义拓展", "大臂-自定义拓展"),
         ],
         options={'ENUM_FLAG'},
         default={
@@ -120,6 +122,9 @@ class ClippingDetectionProperty(bpy.types.PropertyGroup):
             "FOREARM-LOWER_LIMBS",
             "FOREARM-HEAD",
             "FOREARM-BREAST",
+            "UPPER_ARM-LOWER_LIMBS",
+            "UPPER_ARM-HEAD",
+            "UPPER_ARM-BREAST"
         },
         update=lambda self, context: keep_detection_range(self),
     )

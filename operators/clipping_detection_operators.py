@@ -60,10 +60,34 @@ PART_VGS = OrderedDict({
     ],
 })
 
+# 大臂被「腕捩」再分段时，'腕' 与这些捩骨骼共存，需要把 '腕' 从大臂部件里去掉
+UPPER_ARM_TWIST_VGS = {
+    '腕.L': ('腕捩.L', '腕捩1.L', '腕捩2.L', '腕捩3.L'),
+    '腕.R': ('腕捩.R', '腕捩1.R', '腕捩2.R', '腕捩3.R'),
+}
+
 TMP_ANALYSIS_COLLECTION_NAME = "穿模检测临时集合"
 
 # 临时对象的标记属性
 TMP_OBJECT_TAG = "mmd_motion_tools_tmp"
+
+
+def remove_redundant_upper_arm_vgs(part_vgs, vertex_group_names):
+    """
+    大臂部件里有 '腕.L' 且同时有任意一个「腕捩」时，把 '腕.L' 去掉（右臂同理，左右各判各的）
+
+    对于包含次标准骨骼的大多数模型，这样可以减少肩部对检测结果的干扰。
+    对于不包含次标准骨骼的模型，则不做额外适配，由用户自行从检测范围中移除大臂相关项。
+    """
+    vgs = part_vgs.get("UPPER_ARM")
+    if not vgs:
+        return
+
+    for arm_name, twist_names in UPPER_ARM_TWIST_VGS.items():
+        if arm_name not in vertex_group_names:
+            continue
+        if any(name in vertex_group_names for name in twist_names):
+            vgs.remove(arm_name)
 
 
 class ClippingDetectionOperator(bpy.types.Operator):
@@ -146,6 +170,8 @@ class ClippingDetectionOperator(bpy.types.Operator):
         breast_bones = get_breast_bones(armature)
         bb_names = [bb.name for bb in breast_bones]
         part_vgs = copy.deepcopy(PART_VGS)
+        # 大臂有「腕捩」分段时，'腕' 和分段重复，从大臂部件里去掉
+        remove_redundant_upper_arm_vgs(part_vgs, {vg.name for vg in tmp_obj.vertex_groups})
         part_vgs["BREAST"] = bb_names
         # 自定义拓展：把额外指定的骨骼（顶点组）当作独立部件 CUSTOM 参与检测，
         custom_vgs = split_names(props.custom_bones_str)
@@ -746,7 +772,6 @@ def detect_collisions_between_objects(pairs, start, end, merge_on_type_change=Tr
     scene = bpy.context.scene
 
     # 逐帧结果：frame -> [穿模类型, ...]
-    # 现在每帧命中一个就 break，所以列表里只有一个值
     frame_hits = {}
 
     for frame in range(start, end + 1):
@@ -774,7 +799,6 @@ def detect_collisions_between_objects(pairs, start, end, merge_on_type_change=Tr
             if tree_a.overlap(tree_b):
                 name = pair_names.get((obj_a, obj_b)) if pair_names else None
                 frame_hits.setdefault(frame, []).append(name)
-                # break
 
     merged = {}
     seg_start = None

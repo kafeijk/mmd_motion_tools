@@ -248,6 +248,7 @@ class AboutPanel(bpy.types.Panel):
 CLIPPING_ICONS = (
     ("HAND", "VIEW_PAN"),
     ("FOREARM", "MESH_CAPSULE"),
+    ("UPPER_ARM", "MESH_CAPSULE"),
 )
 
 
