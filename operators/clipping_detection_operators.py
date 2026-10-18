@@ -128,6 +128,11 @@ class ClippingDetectionOperator(bpy.types.Operator):
         start_time = time.perf_counter()
         props = context.scene.mmd_motion_tools_detect_clipping
 
+        # 记录选择状态
+        view_layer = context.view_layer
+        selected_before = [obj for obj in view_layer.objects if obj.select_get()]
+        active_before = view_layer.objects.active
+
         tmp_col = get_collection(TMP_ANALYSIS_COLLECTION_NAME)
         # 先按对象上的标记清一次
         remove_part_meshes(tmp_col)
@@ -195,6 +200,11 @@ class ClippingDetectionOperator(bpy.types.Operator):
         if props.remove_tmp:
             remove_part_meshes(tmp_col, part_objs.values(), True)
         purge_temp_datablocks(mesh_pointers_before, key_pointers_before)
+
+        # 恢复选择状态
+        select_only_objects(context, selected_before)
+        if active_before is not None:
+            view_layer.objects.active = active_before
 
         print(f"总耗时: {time.perf_counter() - start_time:.4f} 秒")
         return True
