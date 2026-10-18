@@ -37,6 +37,8 @@ class SimplifyBoneOperator(bpy.types.Operator):
         for armature in armatures:
             if ".dummy_armature" in armature.name:
                 continue
+
+            show_object(armature)
             select_bake_bone(armature, self.bake_mode, self.display_type)
         return {'FINISHED'}
 
