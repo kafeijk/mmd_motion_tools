@@ -1,15 +1,15 @@
-from ..operators.bone_operators import SimplifyBoneOperator, FlipPoseOperator
+from ..operators.bone_operators import SimplifyBoneOperator, FlipPoseOperator, SelectLinkedBoneOperator
 from ..operators.camera_motion_fixer_operators import FindCameraSegmentOperator, CameraMotionFixerOperator
 from ..operators.clipping_detection_operators import ClippingDetectionOperator, ClearClippingOperator, \
     ResetDetectionRangeOperator, ShowClippingTypeOperator
 from ..operators.hand_shell_operators import GenerateHandShellOperator
-from ..properties.clipping_detection_properties import get_frame_hits_map
 from ..operators.motion_fixer_operators import MotionFixerOperator, SyncRangeOperator, RemoveOuterKeyframesOperator, \
     RemoveInnerKeyframesOperator, DeselectKeyframesOperator
 from ..operators.utility_operators import ImportVmdPhysicsOperator, RemovePhysicalBoneAnimationOperator, \
     MutePhysicalBoneAnimationOperator, UnmutePhysicalBoneAnimationOperator, \
     FindRepeatedMotionOperator, ClearRepeatedOperator, SyncKeyframesOperator, FindRepeatedMotionStrongOperator, \
     GetSelectedBoneNameOperator
+from ..properties.clipping_detection_properties import get_frame_hits_map
 from ..utils import *
 
 
@@ -75,13 +75,58 @@ class ToolsPanel(bpy.types.Panel):
                      text=GenerateHandShellOperator.bl_label, icon="MESH_UVSPHERE")
 
 
+class ClippingDetection_PT_Panel(bpy.types.Panel):
+    bl_label = "穿模检测"
+    bl_idname = "MOTIONTOOLS_PT_detect_clipping"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'UI'
+    bl_parent_id = "MOTIONTOOLS_PT_motion_fixer"
+    bl_order = 0
+
+    def draw(self, context):
+        scene = context.scene
+        props = scene.mmd_motion_tools_detect_clipping
+
+        layout = self.layout
+        layout.use_property_split = True
+        layout.use_property_decorate = False
+        col = layout.column()
+
+        sub = col.row(align=True)
+        sub.scale_x = 0.8
+        if not scene.use_preview_range:
+            sub.prop(scene, "frame_start", text="时间范围")
+            sub.prop(scene, "frame_end", text="")
+        col.prop(props, "proxy_accuracy")
+
+        if props.show_detection_range:
+            custom_row = col.row(align=True)
+            custom_row.prop(props, "custom_bones_str")
+            custom_row.operator(GetSelectedBoneNameOperator.bl_idname, text="", icon="MOUSE_LMB")
+            custom_row.operator(SelectLinkedBoneOperator.bl_idname, text="", icon="LINKED")
+
+            range_row = col.row(align=True)
+            range_col = range_row.column(align=True)
+            range_col.prop(props, "detection_range")
+            range_row.operator(ResetDetectionRangeOperator.bl_idname, text="", icon="FILE_REFRESH")
+
+        col.prop(props, "show_detection_range")
+        col.prop(props, "remove_tmp")
+        col.operator(ClippingDetectionOperator.bl_idname, text=ClippingDetectionOperator.bl_label)
+
+        if len(props.clippings) != 0:
+            rows = min(len(props.clippings), 5)
+            col.template_list("MMD_UL_ClippingRange", "", props, "clippings", props, "clipping_index", rows=rows)
+            col.operator(ClearClippingOperator.bl_idname, text=ClearClippingOperator.bl_label)
+
+
 class FindRepeatedMotion_PT_Panel(bpy.types.Panel):
     bl_label = "查找重复动作"
     bl_idname = "MOTIONTOOLS_PT_find_repeated_motion"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
     bl_parent_id = "MOTIONTOOLS_PT_motion_fixer"
-    bl_order = 0
+    bl_order = 1
 
     def draw(self, context):
         scene = context.scene
@@ -105,50 +150,6 @@ class FindRepeatedMotion_PT_Panel(bpy.types.Panel):
             row.enabled = True
         row = col.row(align=True)
         row.operator(ClearRepeatedOperator.bl_idname, text=ClearRepeatedOperator.bl_label)
-
-
-class ClippingDetection_PT_Panel(bpy.types.Panel):
-    bl_label = "穿模检测"
-    bl_idname = "MOTIONTOOLS_PT_detect_clipping"
-    bl_space_type = 'VIEW_3D'
-    bl_region_type = 'UI'
-    bl_parent_id = "MOTIONTOOLS_PT_motion_fixer"
-    bl_order = 1
-
-    def draw(self, context):
-        scene = context.scene
-        props = scene.mmd_motion_tools_detect_clipping
-
-        layout = self.layout
-        layout.use_property_split = True
-        layout.use_property_decorate = False
-        col = layout.column()
-
-        sub = col.row(align=True)
-        sub.scale_x = 0.8
-        if not scene.use_preview_range:
-            sub.prop(scene, "frame_start", text="时间范围")
-            sub.prop(scene, "frame_end", text="")
-        col.prop(props, "proxy_accuracy")
-
-        if props.show_detection_range:
-            custom_row = col.row(align=True)
-            custom_row.prop(props, "custom_bones_str")
-            custom_row.operator(GetSelectedBoneNameOperator.bl_idname, text="", icon="MOUSE_LMB")
-
-            range_row = col.row(align=True)
-            range_col = range_row.column(align=True)
-            range_col.prop(props, "detection_range")
-            range_row.operator(ResetDetectionRangeOperator.bl_idname, text="", icon="FILE_REFRESH")
-
-        col.prop(props, "show_detection_range")
-        col.prop(props, "remove_tmp")
-        col.operator(ClippingDetectionOperator.bl_idname, text=ClippingDetectionOperator.bl_label)
-
-        if len(props.clippings) != 0:
-            rows = min(len(props.clippings), 5)
-            col.template_list("MMD_UL_ClippingRange", "", props, "clippings", props, "clipping_index", rows=rows)
-            col.operator(ClearClippingOperator.bl_idname, text=ClearClippingOperator.bl_label)
 
 
 class MotionFixer_PT_Panel(bpy.types.Panel):
