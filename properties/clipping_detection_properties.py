@@ -68,10 +68,11 @@ class ClippingRangeItem(bpy.types.PropertyGroup):
 
 
 class ClippingFrameHit(bpy.types.PropertyGroup):
-    """某一帧的穿模类型（逐帧结果，比整段汇总更精确）"""
+    """逐帧结果里的一条命中记录：一帧命中几个部件对就有几条"""
     frame: bpy.props.IntProperty(name="帧")
-    # 这一帧命中的部件对名称，多个用 ", " 分隔
-    types: bpy.props.StringProperty(name="穿模部件对")
+    # 单个部件对名称，如 "HAND-TORSO"
+    # 一项一条而不是拼成字符串，读的时候直接按帧 append 成列表，不需要再拆逗号
+    name: bpy.props.StringProperty(name="穿模部件对")
 
 
 class ClippingDetectionProperty(bpy.types.PropertyGroup):
@@ -201,13 +202,15 @@ _frame_hits_cache = {}
 
 
 def set_frame_hits(props, frame_hits):
-    """把 {帧: 穿模类型} 写进 props.frame_hits，并让之前的字典缓存失效"""
+    """把 {帧: [穿模类型, ...]} 写进 props.frame_hits，并让之前的字典缓存失效"""
     props.frame_hits.clear()
     for frame in sorted(frame_hits):
-        types = frame_hits[frame] or ""
-        hit = props.frame_hits.add()
-        hit.frame = frame
-        hit.types = types
+        # 一项一条：同一帧命中多个部件对就是多条记录，不拼字符串
+        for name in frame_hits[frame]:
+            hit = props.frame_hits.add()
+            hit.frame = frame
+            # 没传部件对名称时这里是 None，存成空串更安全
+            hit.name = name or ""
 
     props.frame_hits_version += 1
     _frame_hits_cache.clear()
@@ -222,13 +225,16 @@ def clear_clipping_results(props):
 
 
 def get_frame_hits_map(props):
-    """把 frame_hits 集合转成 {帧: 穿模类型} 的字典"""
+    """把 frame_hits 集合转成 {帧: [穿模类型, ...]} 的字典"""
     key = (props.as_pointer(), props.frame_hits_version)
     cached = _frame_hits_cache.get(key)
     if cached is not None:
         return cached
 
-    frame_hits = {hit.frame: hit.types for hit in props.frame_hits}
+    frame_hits = {}
+    for hit in props.frame_hits:
+        frame_hits.setdefault(hit.frame, []).append(hit.name)
+
     # 多场景时会有多个键，留几个够用，超出就整体清掉（旧版本的键反正也不会再被查到）
     if len(_frame_hits_cache) > 8:
         _frame_hits_cache.clear()

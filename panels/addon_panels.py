@@ -253,12 +253,12 @@ CLIPPING_ICONS = (
 
 def get_clipping_icons(types):
     """
-    把 "HAND-TORSO, FOREARM-HEAD" 这样的类型串拆成 {图标名: [部件对, ...]}
+    把 ["HAND-TORSO", "FOREARM-HEAD"] 这样的部件对列表按图标分组
 
     返回字典而不是集合，这样点按钮时能只显示与该图标对应的那部分类型
     """
     icons = {}
-    for item_type in split_names(types):
+    for item_type in types:
         part = item_type.split("-")[0]
         for keyword, icon_name in CLIPPING_ICONS:
             if keyword in part:
@@ -284,8 +284,8 @@ class MMD_UL_ClippingRange(bpy.types.UIList):
 
         # 右侧：图标
         subrow = split.row(align=True)
-        # 图标始终按整段的类型汇总显示
-        icons = get_clipping_icons(item.types)
+        # 图标始终按整段的类型汇总显示（段里存的是逗号串，这里拆成列表再分组）
+        icons = get_clipping_icons(split_names(item.types))
         # 当前帧命中的那部分，只用来决定哪个图标变成可点的按钮
         hit_icons = get_clipping_icons(frame_types) if frame_types else {}
 

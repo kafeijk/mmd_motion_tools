@@ -745,7 +745,8 @@ def detect_collisions_between_objects(pairs, start, end, merge_on_type_change=Tr
     """
     scene = bpy.context.scene
 
-    # 逐帧结果：frame -> 穿模类型（同一帧只记第一个出现的穿模类型）
+    # 逐帧结果：frame -> [穿模类型, ...]
+    # 现在每帧命中一个就 break，所以列表里只有一个值
     frame_hits = {}
 
     for frame in range(start, end + 1):
@@ -772,24 +773,25 @@ def detect_collisions_between_objects(pairs, start, end, merge_on_type_change=Tr
 
             if tree_a.overlap(tree_b):
                 name = pair_names.get((obj_a, obj_b)) if pair_names else None
-                frame_hits[frame] = name
-                break
+                frame_hits.setdefault(frame, []).append(name)
+                # break
 
     merged = {}
     seg_start = None
     seg_end = None
     seg_names = None
 
-    # 合并连续帧：把 {frame: 名称} 压成 {(start, end): [名称]}
+    # 合并连续帧：把 {帧: [名称]} 压成 {(start, end): [名称]}
     for frame in sorted(frame_hits):
-        name = frame_hits[frame]
+        names = frame_hits[frame]
 
-        # 能接上的条件：帧号连续，且（允许换类型 或 类型和当前区间一致）
-        if seg_start is not None and frame == seg_end + 1 and (merge_on_type_change or seg_names == [name]):
+        # 能接上的条件：帧号连续，且（允许换类型 或 类型和当前区间完全一致）
+        if seg_start is not None and frame == seg_end + 1 and (merge_on_type_change or seg_names == names):
             seg_end = frame
             # 换类型时把新类型也收进这个区间的列表
-            if name not in seg_names:
-                seg_names.append(name)
+            for name in names:
+                if name not in seg_names:
+                    seg_names.append(name)
             continue
 
         # 接不上，先把上一个区间收尾
@@ -798,7 +800,8 @@ def detect_collisions_between_objects(pairs, start, end, merge_on_type_change=Tr
 
         seg_start = frame
         seg_end = frame
-        seg_names = [name]
+        # 必须复制一份，seg_names 会做 append
+        seg_names = list(names)
 
     if seg_start is not None:
         merged[(seg_start, seg_end)] = seg_names
