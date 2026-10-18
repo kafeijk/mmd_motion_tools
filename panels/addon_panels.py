@@ -2,6 +2,7 @@ from ..operators.bone_operators import SimplifyBoneOperator, FlipPoseOperator
 from ..operators.camera_motion_fixer_operators import FindCameraSegmentOperator, CameraMotionFixerOperator
 from ..operators.clipping_detection_operators import ClippingDetectionOperator, ClearClippingOperator, \
     ResetDetectionRangeOperator, ShowClippingTypeOperator
+from ..operators.hand_shell_operators import GenerateHandShellOperator
 from ..properties.clipping_detection_properties import get_frame_hits_map
 from ..operators.motion_fixer_operators import MotionFixerOperator, SyncRangeOperator, RemoveOuterKeyframesOperator, \
     RemoveInnerKeyframesOperator, DeselectKeyframesOperator
@@ -68,6 +69,10 @@ class ToolsPanel(bpy.types.Panel):
                      text=MutePhysicalBoneAnimationOperator.bl_label, icon='HIDE_ON')
         row.operator(UnmutePhysicalBoneAnimationOperator.bl_idname,
                      text=UnmutePhysicalBoneAnimationOperator.bl_label, icon='HIDE_OFF')
+
+        # 手部罩体：按手部骨骼方向算出手的范围，生成一个椭圆罩体
+        col.operator(GenerateHandShellOperator.bl_idname,
+                     text=GenerateHandShellOperator.bl_label, icon="MESH_UVSPHERE")
 
 
 class FindRepeatedMotion_PT_Panel(bpy.types.Panel):
