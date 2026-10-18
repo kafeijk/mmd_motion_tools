@@ -67,6 +67,13 @@ class ClippingRangeItem(bpy.types.PropertyGroup):
     types: bpy.props.StringProperty(name="穿模部件对")
 
 
+class ClippingFrameHit(bpy.types.PropertyGroup):
+    """某一帧的穿模类型（逐帧结果，比整段汇总更精确）"""
+    frame: bpy.props.IntProperty(name="帧")
+    # 这一帧命中的部件对名称，多个用 ", " 分隔
+    types: bpy.props.StringProperty(name="穿模部件对")
+
+
 class ClippingDetectionProperty(bpy.types.PropertyGroup):
     proxy_accuracy: bpy.props.EnumProperty(
         name="代理精度",
@@ -151,6 +158,15 @@ class ClippingDetectionProperty(bpy.types.PropertyGroup):
         type=ClippingRangeItem
     )
 
+    # 逐帧穿模结果：{帧: 穿模类型} 的可持久化版本
+    # （集合本身没法当字典查，UIList 里用 get_frame_hits_map 转成字典）
+    frame_hits: bpy.props.CollectionProperty(
+        type=ClippingFrameHit
+    )
+
+    # 逐帧结果的版本号：每次检测后自增，用来让 get_frame_hits_map 的缓存失效
+    frame_hits_version: bpy.props.IntProperty(default=0)
+
     # 列表里当前选中项的索引
     clipping_index: bpy.props.IntProperty()
 
@@ -177,3 +193,55 @@ def get_ordered_detection_range(props):
     # 兜底：老工程里可能残留已被删除的标识符，统一排到最后
     unknown = len(order)
     return sorted(props.detection_range, key=lambda identifier: order.get(identifier, unknown))
+
+
+# frame_hits 集合 -> 字典的缓存
+# 键是 (属性组地址, 版本号)，每次检测后版本号自增，旧缓存自然失效
+_frame_hits_cache = {}
+
+
+def set_frame_hits(props, frame_hits):
+    """把 {帧: 穿模类型} 写进 props.frame_hits，并让之前的字典缓存失效"""
+    props.frame_hits.clear()
+    for frame in sorted(frame_hits):
+        types = frame_hits[frame] or ""
+        hit = props.frame_hits.add()
+        hit.frame = frame
+        hit.types = types
+
+    props.frame_hits_version += 1
+    _frame_hits_cache.clear()
+
+
+def clear_clipping_results(props):
+    """清除检测结果：区间列表和逐帧结果一起清"""
+    props.clippings.clear()
+    props.frame_hits.clear()
+    props.frame_hits_version += 1
+    _frame_hits_cache.clear()
+
+
+def get_frame_hits_map(props):
+    """把 frame_hits 集合转成 {帧: 穿模类型} 的字典"""
+    key = (props.as_pointer(), props.frame_hits_version)
+    cached = _frame_hits_cache.get(key)
+    if cached is not None:
+        return cached
+
+    frame_hits = {hit.frame: hit.types for hit in props.frame_hits}
+    # 多场景时会有多个键，留几个够用，超出就整体清掉（旧版本的键反正也不会再被查到）
+    if len(_frame_hits_cache) > 8:
+        _frame_hits_cache.clear()
+    _frame_hits_cache[key] = frame_hits
+    return frame_hits
+
+
+def get_clipping_type_labels(props, types):
+    """
+    把 "HAND-TORSO" 这类部件对标识符换成界面上的名称（如「手部-躯干」）
+
+    名称直接取 detection_range 里定义的第二项，以后改文案不用同步维护
+    """
+    enum_items = props.bl_rna.properties["detection_range"].enum_items
+    labels = {item.identifier: item.name for item in enum_items}
+    return [labels.get(name, name) for name in split_names(types)]

@@ -1,7 +1,8 @@
 from ..operators.bone_operators import SimplifyBoneOperator, FlipPoseOperator
 from ..operators.camera_motion_fixer_operators import FindCameraSegmentOperator, CameraMotionFixerOperator
 from ..operators.clipping_detection_operators import ClippingDetectionOperator, ClearClippingOperator, \
-    ResetDetectionRangeOperator
+    ResetDetectionRangeOperator, ShowClippingTypeOperator
+from ..properties.clipping_detection_properties import get_frame_hits_map
 from ..operators.motion_fixer_operators import MotionFixerOperator, SyncRangeOperator, RemoveOuterKeyframesOperator, \
     RemoveInnerKeyframesOperator, DeselectKeyframesOperator
 from ..operators.utility_operators import ImportVmdPhysicsOperator, RemovePhysicalBoneAnimationOperator, \
@@ -100,6 +101,7 @@ class FindRepeatedMotion_PT_Panel(bpy.types.Panel):
         row = col.row(align=True)
         row.operator(ClearRepeatedOperator.bl_idname, text=ClearRepeatedOperator.bl_label)
 
+
 class ClippingDetection_PT_Panel(bpy.types.Panel):
     bl_label = "穿模检测"
     bl_idname = "MOTIONTOOLS_PT_detect_clipping"
@@ -142,7 +144,6 @@ class ClippingDetection_PT_Panel(bpy.types.Panel):
             rows = min(len(props.clippings), 5)
             col.template_list("MMD_UL_ClippingRange", "", props, "clippings", props, "clipping_index", rows=rows)
             col.operator(ClearClippingOperator.bl_idname, text=ClearClippingOperator.bl_label)
-
 
 
 class MotionFixer_PT_Panel(bpy.types.Panel):
@@ -241,45 +242,65 @@ class AboutPanel(bpy.types.Panel):
         col.label(text='作者：KafeiMMD')
 
 
+# 部件对 -> 图标
+# 「手」用 VIEW_PAN，「小臂」用 MESH_CAPSULE
+# 顺序有意义：先匹配到的生效
+CLIPPING_ICONS = (
+    ("HAND", "VIEW_PAN"),
+    ("FOREARM", "MESH_CAPSULE"),
+)
+
+
+def get_clipping_icons(types):
+    """
+    把 "HAND-TORSO, FOREARM-HEAD" 这样的类型串拆成 {图标名: [部件对, ...]}
+
+    返回字典而不是集合，这样点按钮时能只显示与该图标对应的那部分类型
+    """
+    icons = {}
+    for item_type in split_names(types):
+        part = item_type.split("-")[0]
+        for keyword, icon_name in CLIPPING_ICONS:
+            if keyword in part:
+                icons.setdefault(icon_name, []).append(item_type)
+                break
+    return icons
+
+
 class MMD_UL_ClippingRange(bpy.types.UIList):
     """穿模检测结果列表"""
 
     def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
         frame = context.scene.frame_current
         row = layout.row(align=True)
-        split = row.split(factor=0.8, align=True)
-
-        # 当前帧落在这一段的区间内时加个标记，方便对照视图
-        active = item.start <= frame <= item.end
+        split = row.split(factor=0.8)
 
         subrow = split.row(align=True)
         subrow.operator("mmd_motion_tools.jump_frame", text=str(item.start)).frame = item.start
         subrow.operator("mmd_motion_tools.jump_frame", text=str(item.end)).frame = item.end
 
-        icons = set()
-        for item_type in item.types.split(","):
-            part = item_type.strip().split("-")[0]
-            if "HAND" in part:
-                icons.add("VIEW_PAN")
-            elif "FOREARM" in part:
-                icons.add("MESH_CAPSULE")
-            else:
-                pass
+        # 当前帧落在这一段的区间内时，取逐帧结果
+        frame_types = get_frame_hits_map(data).get(frame) if item.start <= frame <= item.end else None
 
         # 右侧：图标
         subrow = split.row(align=True)
+        # 图标始终按整段的类型汇总显示
+        icons = get_clipping_icons(item.types)
+        # 当前帧命中的那部分，只用来决定哪个图标变成可点的按钮
+        hit_icons = get_clipping_icons(frame_types) if frame_types else {}
+
         # 始终按指定顺序显示
-        if "VIEW_PAN" in icons:
-            subrow.label(text="", icon="VIEW_PAN")
-        else:
-            subrow.label(text="", icon="BLANK1")
-
-        if "MESH_CAPSULE" in icons:
-            subrow.label(text="", icon="MESH_CAPSULE")
-        else:
-            subrow.label(text="", icon="BLANK1")
-
-
+        for icon_name in ("VIEW_PAN", "MESH_CAPSULE"):
+            if icon_name not in icons:
+                subrow.label(text="", icon="BLANK1")
+            elif icon_name in hit_icons:
+                # 当前帧命中：图标变成按钮，点开后显示这一帧具体的穿模类型
+                op = subrow.operator(ShowClippingTypeOperator.bl_idname, text="", icon=icon_name)
+                op.frame = frame
+                op.types = ", ".join(hit_icons[icon_name])
+            else:
+                # 当前帧没命中这一项：只提示这段出现过这类穿模
+                subrow.label(text="", icon=icon_name)
 
 
 class MMD_UL_RepeatedRange(bpy.types.UIList):

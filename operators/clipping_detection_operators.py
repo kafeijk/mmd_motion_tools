@@ -3,7 +3,8 @@ from collections import OrderedDict
 
 import mathutils
 
-from ..properties.clipping_detection_properties import get_ordered_detection_range
+from ..properties.clipping_detection_properties import get_ordered_detection_range, set_frame_hits, \
+    clear_clipping_results, get_clipping_type_labels
 from ..utils import *
 
 # 手（手首+手指） - 躯干（上半身+下半身+上半身2+胸部）
@@ -172,24 +173,27 @@ class ClippingDetectionOperator(bpy.types.Operator):
 
         pairs = list(pair_key_map.keys())
 
-        result = detect_collisions_between_objects(pairs, frame_start, frame_end, pair_names=pair_key_map)
+        merged, frame_hits = detect_collisions_between_objects(pairs, frame_start, frame_end,
+                                                              pair_names=pair_key_map)
 
         # 注意要用 original_scene：上面 scene.new 之后当前场景已经变了
         props = original_scene.mmd_motion_tools_detect_clipping
         props.clippings.clear()
         total_frames = 0
-        for (seg_start, seg_end), names in result.items():
+        for (seg_start, seg_end), names in merged.items():
             item = props.clippings.add()
             item.start = seg_start
             item.end = seg_end
             item.types = ", ".join(names)
             total_frames += seg_end - seg_start + 1
 
-        if not result:
+        # 逐帧结果也存一份，列表可以按当前帧显示更精确的穿模类型
+        set_frame_hits(props, frame_hits)
+
+        if not merged:
             self.report({'INFO'}, '未检测到穿模!')
         else:
-            self.report({'INFO'},
-                        f'检测到 {len(result)} 段穿模，共 {total_frames} 帧')
+            self.report({'INFO'}, f'检测到 {len(merged)} 段穿模，共 {total_frames} 帧')
 
         # 恢复原场景并删除临时场景
         bpy.context.window.scene = original_scene
@@ -231,7 +235,28 @@ class ClearClippingOperator(bpy.types.Operator):
 
     def execute(self, context):
         props = context.scene.mmd_motion_tools_detect_clipping
-        props.clippings.clear()
+        clear_clipping_results(props)
+        return {'FINISHED'}
+
+
+class ShowClippingTypeOperator(bpy.types.Operator):
+    bl_idname = "mmd_motion_tools.show_clipping_type"
+    bl_label = "查看穿模类型"
+    bl_description = "显示当前帧的穿模类型"
+    bl_options = {'INTERNAL'}
+
+    frame: bpy.props.IntProperty()
+    # 这一帧命中的部件对，多个用 ", " 分隔
+    types: bpy.props.StringProperty()
+
+    def execute(self, context):
+        props = context.scene.mmd_motion_tools_detect_clipping
+        labels = get_clipping_type_labels(props, self.types)
+        if not labels:
+            return {'CANCELLED'}
+
+        # 状态栏 / 信息编辑器里提示，比弹窗轻，也不占额外交互
+        self.report({'INFO'}, f"穿模类型：" + "、".join(labels))
         return {'FINISHED'}
 
 
@@ -778,7 +803,7 @@ def detect_collisions_between_objects(pairs, start, end, merge_on_type_change=Tr
     if seg_start is not None:
         merged[(seg_start, seg_end)] = seg_names
 
-    return merged
+    return merged, frame_hits
 
 
 def get_breast_bones(armature):
