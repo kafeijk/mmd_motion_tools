@@ -1,6 +1,7 @@
 from ..operators.bone_operators import SimplifyBoneOperator, FlipPoseOperator
 from ..operators.camera_motion_fixer_operators import FindCameraSegmentOperator, CameraMotionFixerOperator
-from ..operators.clipping_detection_operators import ClippingDetectionOperator, ClearClippingOperator
+from ..operators.clipping_detection_operators import ClippingDetectionOperator, ClearClippingOperator, \
+    ResetDetectionRangeOperator
 from ..operators.motion_fixer_operators import MotionFixerOperator, SyncRangeOperator, RemoveOuterKeyframesOperator, \
     RemoveInnerKeyframesOperator, DeselectKeyframesOperator
 from ..operators.utility_operators import ImportVmdPhysicsOperator, RemovePhysicalBoneAnimationOperator, \
@@ -128,7 +129,10 @@ class ClippingDetection_PT_Panel(bpy.types.Panel):
             custom_row.prop(props, "custom_bones_str")
             custom_row.operator(GetSelectedBoneNameOperator.bl_idname, text="", icon="MOUSE_LMB")
 
-            col.prop(props, "detection_range")
+            range_row = col.row(align=True)
+            range_col = range_row.column(align=True)
+            range_col.prop(props, "detection_range")
+            range_row.operator(ResetDetectionRangeOperator.bl_idname, text="", icon="FILE_REFRESH")
 
         col.prop(props, "show_detection_range")
         col.prop(props, "remove_tmp")

@@ -200,6 +200,19 @@ class ClippingDetectionOperator(bpy.types.Operator):
         return True
 
 
+class ResetDetectionRangeOperator(bpy.types.Operator):
+    bl_idname = "mmd_motion_tools.reset_detection_range"
+    bl_label = "重置检测范围"
+    bl_description = "把检测范围恢复为默认值"
+    bl_options = {'UNDO'}
+
+    def execute(self, context):
+        props = context.scene.mmd_motion_tools_detect_clipping
+        # 默认值从 RNA 里读，和属性定义里的 default 始终一致
+        props.detection_range = set(props.bl_rna.properties["detection_range"].default_flag)
+        return {'FINISHED'}
+
+
 class ClearClippingOperator(bpy.types.Operator):
     bl_idname = "mmd_motion_tools.clear_clipping"
     bl_label = "清除"
