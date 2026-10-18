@@ -7,18 +7,6 @@ from ..properties.clipping_detection_properties import get_ordered_detection_ran
     clear_clipping_results, get_clipping_type_labels
 from ..utils import *
 
-# 手（手首+手指） - 躯干（上半身+下半身+上半身2+胸部）
-# 小臂（ひじ+手捩） - 躯干（上半身+下半身+上半身2+胸部）
-# 大臂（腕+腕捩） - 躯干（上半身+下半身+上半身2+胸部）
-# 手（手首+手指） - 腿（左右腿）
-# 小臂（ひじ+手捩） - 腿（左右腿）
-# 大臂（腕+腕捩） - 腿（左右腿）
-# 手（手首+手指） - 头（首+头）
-# 小臂（ひじ+手捩） -头（首+头）
-# 大臂（腕+腕捩） - 头（首+头）
-# 手（手首+手指） - 大臂（腕+腕捩）
-
-
 VG_NAMES = [""]
 VG_PAIRS = [""]
 
@@ -66,6 +54,10 @@ UPPER_ARM_TWIST_VGS = {
     '腕.R': ('腕捩.R', '腕捩1.R', '腕捩2.R', '腕捩3.R'),
 }
 
+# 躯干骨骼链的两端：从「首」往上一直找到「上半身」
+SPINE_NECK_BONE_NAME = '首'
+SPINE_ROOT_BONE_NAME = '上半身'
+
 TMP_ANALYSIS_COLLECTION_NAME = "穿模检测临时集合"
 
 # 临时对象的标记属性
@@ -88,6 +80,36 @@ def remove_redundant_upper_arm_vgs(part_vgs, vertex_group_names):
             continue
         if any(name in vertex_group_names for name in twist_names):
             vgs.remove(arm_name)
+
+
+def get_spine_bone_names(armature):
+    """取「首」往上接到「上半身」的那一串骨骼名"""
+    bones = armature.data.bones
+    neck = bones.get(SPINE_NECK_BONE_NAME)
+    if neck is None:
+        return []
+
+    names = []
+    bone = neck.parent
+    while bone is not None:
+        names.append(bone.name)
+        # 只有遇到“上半身”才会返回
+        if bone.name == SPINE_ROOT_BONE_NAME:
+            return names
+        bone = bone.parent
+
+    return []
+
+
+def add_spine_bones_to_torso(part_vgs, armature):
+    """把「首」到「上半身」之间的骨骼补进 TORSO，TORSO 里已有的不重复加"""
+    torso = part_vgs.get("TORSO")
+    if not torso:
+        return
+
+    for name in get_spine_bone_names(armature):
+        if name not in torso:
+            torso.append(name)
 
 
 class ClippingDetectionOperator(bpy.types.Operator):
@@ -172,6 +194,8 @@ class ClippingDetectionOperator(bpy.types.Operator):
         part_vgs = copy.deepcopy(PART_VGS)
         # 大臂有「腕捩」分段时，'腕' 和分段重复，从大臂部件里去掉
         remove_redundant_upper_arm_vgs(part_vgs, {vg.name for vg in tmp_obj.vertex_groups})
+        # 上半身被拆成多段（上半身2、上半身3等）时，把「首」到「上半身」的骨骼补进 TORSO
+        add_spine_bones_to_torso(part_vgs, armature)
         part_vgs["BREAST"] = bb_names
         # 自定义拓展：把额外指定的骨骼（顶点组）当作独立部件 CUSTOM 参与检测，
         custom_vgs = split_names(props.custom_bones_str)
@@ -199,8 +223,7 @@ class ClippingDetectionOperator(bpy.types.Operator):
 
         pairs = list(pair_key_map.keys())
 
-        merged, frame_hits = detect_collisions_between_objects(pairs, frame_start, frame_end,
-                                                              pair_names=pair_key_map)
+        merged, frame_hits = detect_collisions_between_objects(pairs, frame_start, frame_end, pair_names=pair_key_map)
 
         # 注意要用 original_scene：上面 scene.new 之后当前场景已经变了
         props = original_scene.mmd_motion_tools_detect_clipping
