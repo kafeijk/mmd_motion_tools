@@ -309,6 +309,8 @@ class ClippingDetectionOperator(bpy.types.Operator):
     def init_temp_objects(self, context):
         """初始化：复制并合并模型网格，再按顶点组划分出各部件代理网格"""
         tmp_col = get_collection(TMP_ANALYSIS_COLLECTION_NAME)
+        # 集合被隐藏/排除时里面的对象选不中，join、复制修改器都会 poll 失败，先恢复显示
+        show_collection(tmp_col)
         # 先按对象上的标记清一次
         remove_part_meshes(tmp_col)
         # 记录执行前已有的网格、形态键数据块：后面清理临时对象时，只清理本次新建的，
@@ -828,6 +830,17 @@ def create_tmp_armature(context, armature, tmp_col, mesh_objects, part_vgs):
     tmp_armature.select_set(False)
     tmp_armature.hide_set(True)
     return tmp_armature
+
+
+def show_collection(collection):
+    """把集合在视图层里恢复成可见：取消排除、关掉隐藏"""
+    layer_collection = find_layer_collection_by_name(
+        bpy.context.view_layer.layer_collection, collection.name)
+    if layer_collection is None:
+        return
+
+    layer_collection.exclude = False
+    layer_collection.hide_viewport = False
 
 
 def repoint_armature_modifiers(mesh_objects, tmp_armature):
