@@ -1,4 +1,5 @@
 import copy
+import traceback
 from collections import OrderedDict
 
 import mathutils
@@ -62,6 +63,46 @@ TMP_ANALYSIS_COLLECTION_NAME = "穿模检测临时集合"
 
 # 临时对象的标记属性
 TMP_OBJECT_TAG = "mmd_motion_tools_tmp"
+
+# 检测进度：检测过程中会切到临时场景，scene 上的属性那时读的是另一个场景，
+# 所以进度放在模块级，面板直接从 get_detection_progress() 取
+_DETECTION_PROGRESS = {
+    "active": False,
+    "factor": 0.0,
+    "text": "",
+}
+
+# 初始化（复制临时对象、划分部件）统一用这一句，不再细分步骤
+INIT_PROGRESS_TEXT = "初始化中..."
+
+# 每次 modal 事件最多推进的帧数：单帧太慢时不至于把界面卡死，
+# 正常情况下 1% 远小于这个值，进度还是每 1% 刷新一次
+MAX_FRAMES_PER_STEP = 100
+
+STAGE_INIT = "init"
+STAGE_DETECT = "detect"
+
+
+def get_detection_progress():
+    """当前检测进度（面板绘制用）"""
+    return _DETECTION_PROGRESS
+
+
+def set_detection_progress(active, factor=0.0, text=""):
+    """更新检测进度；active=False 表示结束，面板不再画进度条"""
+    _DETECTION_PROGRESS["active"] = bool(active)
+    _DETECTION_PROGRESS["factor"] = min(max(float(factor), 0.0), 1.0)
+    _DETECTION_PROGRESS["text"] = text
+
+
+def tag_redraw(context):
+    """标记 3D 视图重画：进度条在侧边栏里，不主动重绘就要等下次界面刷新"""
+    window = getattr(context, "window", None)
+    if window is None or window.screen is None:
+        return
+    for area in window.screen.areas:
+        if area.type == 'VIEW_3D':
+            area.tag_redraw()
 
 
 def remove_redundant_upper_arm_vgs(part_vgs, vertex_group_names):
@@ -165,68 +206,211 @@ class ClippingDetectionOperator(bpy.types.Operator):
         if result is None:
             return {'CANCELLED'}
 
-        armature, objects = result
-        if not self.detect_clipping(context, armature, objects):
+        self.armature, self.objects = result
+        self.props = context.scene.mmd_motion_tools_detect_clipping
+        self.original_scene = context.scene
+        self.start_time = time.perf_counter()
+
+        # 阶段状态
+        self.stage = STAGE_INIT
+        self.generator = None
+        self.percent = -1
+        # 每 1% 对应的帧数，start_detection 里按帧范围算
+        self.frames_per_percent = 1
+        self.merged = {}
+        self.frame_hits = {}
+        self.tmp_col = None
+        self.tmp_obj = None
+        self.part_objs = {}
+        self.tmp_scene = None
+        self.timer = None
+        self.flush_count = 0
+
+        # 记录选择状态
+        view_layer = context.view_layer
+        self.view_layer = view_layer
+        self.selected_before = [obj for obj in view_layer.objects if obj.select_get()]
+        self.active_before = view_layer.objects.active
+
+        set_detection_progress(True, 0.0, INIT_PROGRESS_TEXT)
+
+        # 后台（-b）没有事件循环，modal 永远不会被驱动，直接同步跑完
+        if bpy.app.background:
+            try:
+                self.run_sync(context)
+            except Exception as error:
+                self.abort(context)
+                traceback.print_exc()
+                self.report({'ERROR'}, f'检测失败：{error}')
+                return {'CANCELLED'}
+            return {'FINISHED'}
+
+        # 让出主线程，靠 TIMER 事件分片推进；先多等两帧，进度条才有机会画出来
+        self.timer = context.window_manager.event_timer_add(0.01, window=context.window)
+        context.window_manager.modal_handler_add(self)
+        return {'RUNNING_MODAL'}
+
+    def modal(self, context, event):
+        # 只处理定时器事件：检测途中用户的操作一律忽略，避免中途改坏临时数据
+        if event.type != 'TIMER':
+            # 例外：按 ESC 中止，先把场景和临时数据收拾干净再退出
+            if event.type == 'ESC':
+                self.abort(context)
+                self.report({'INFO'}, '已取消检测')
+                return {'CANCELLED'}
+            return {'RUNNING_MODAL'}
+
+        if self.flush_count < 2:
+            self.flush_count += 1
+            tag_redraw(context)
+            return {'RUNNING_MODAL'}
+
+        try:
+            if not self.step(context):
+                tag_redraw(context)
+                return {'RUNNING_MODAL'}
+            self.finish(context)
+        except Exception as error:
+            # 出错也要把场景、临时数据和进度条收拾干净，否则文件会留下半截状态
+            self.abort(context)
+            traceback.print_exc()
+            self.report({'ERROR'}, f'检测失败：{error}')
             return {'CANCELLED'}
 
         return {'FINISHED'}
 
-    def detect_clipping(self, context, armature, objects):
-        start_time = time.perf_counter()
-        props = context.scene.mmd_motion_tools_detect_clipping
+    def run_sync(self, context):
+        """同步跑完所有阶段（后台测试用）"""
+        while not self.step(context):
+            pass
+        self.finish(context)
 
-        # 记录选择状态
-        view_layer = context.view_layer
-        selected_before = [obj for obj in view_layer.objects if obj.select_get()]
-        active_before = view_layer.objects.active
+    def step(self, context):
+        """
+        推进一个阶段，全部完成时返回 True
 
+        每个阶段只做一块活：modal 每次 TIMER 只调用一次，Blender 才有机会重绘界面
+        """
+        if self.stage == STAGE_INIT:
+            # 复制临时对象和划分部件放在同一批里做完，即「初始化中...」
+            self.init_temp_objects(context)
+            self.stage = STAGE_DETECT
+            return False
+
+        return self.step_detection()
+
+    def init_temp_objects(self, context):
+        """初始化：复制并合并模型网格，再按顶点组划分出各部件代理网格"""
         tmp_col = get_collection(TMP_ANALYSIS_COLLECTION_NAME)
         # 先按对象上的标记清一次
         remove_part_meshes(tmp_col)
         # 记录执行前已有的网格、形态键数据块：后面清理临时对象时，只清理本次新建的，
         # 不会误删用户自己留在文件里的孤立数据
-        mesh_pointers_before = {mesh.as_pointer() for mesh in bpy.data.meshes}
-        key_pointers_before = {key.as_pointer() for key in bpy.data.shape_keys}
-        tmp_obj = create_tmp_obj(context, objects, tmp_col)
+        self.mesh_pointers_before = {mesh.as_pointer() for mesh in bpy.data.meshes}
+        self.key_pointers_before = {key.as_pointer() for key in bpy.data.shape_keys}
 
-        breast_bones = get_breast_bones(armature)
-        bb_names = [bb.name for bb in breast_bones]
+        self.tmp_col = tmp_col
+        self.tmp_obj = create_tmp_obj(context, self.objects, tmp_col)
+        self.part_objs = self.create_part_objects()
+
+    def create_part_objects(self):
+        """按顶点组划分身体部件，生成各部件代理网格，返回 {部件: 代理网格}"""
         part_vgs = copy.deepcopy(PART_VGS)
         # 大臂有「腕捩」分段时，'腕' 和分段重复，从大臂部件里去掉
-        remove_redundant_upper_arm_vgs(part_vgs, {vg.name for vg in tmp_obj.vertex_groups})
+        remove_redundant_upper_arm_vgs(part_vgs, {vg.name for vg in self.tmp_obj.vertex_groups})
         # 上半身被拆成多段（上半身2、上半身3等）时，把「首」到「上半身」的骨骼补进 TORSO
-        add_spine_bones_to_torso(part_vgs, armature)
-        part_vgs["BREAST"] = bb_names
-        # 自定义拓展：把额外指定的骨骼（顶点组）当作独立部件 CUSTOM 参与检测，
-        custom_vgs = split_names(props.custom_bones_str)
+        add_spine_bones_to_torso(part_vgs, self.armature)
+        part_vgs["BREAST"] = [bb.name for bb in get_breast_bones(self.armature)]
+        # 自定义拓展：把额外指定的骨骼（顶点组）当作独立部件 CUSTOM 参与检测
+        custom_vgs = split_names(self.props.custom_bones_str)
         if custom_vgs:
             part_vgs["CUSTOM"] = custom_vgs
-        part_vertices = classify_vertices(tmp_obj, part_vgs)
-        part_objs = create_part_meshes(props, tmp_obj, part_vertices, tmp_col)
 
-        # 在场景切换前获取首尾帧，否则切换后将变为默认值
-        frame_start = context.scene.frame_start
-        frame_end = context.scene.frame_end
-        # 保存原场景
-        original_scene = context.scene
+        part_vertices = classify_vertices(self.tmp_obj, part_vgs)
+        return create_part_meshes(self.props, self.tmp_obj, part_vertices, self.tmp_col)
+
+    def start_detection(self):
+        """切到空白场景并建好逐帧生成器（不动原场景，避免依赖图整体重算）"""
+        detection_range = get_ordered_detection_range(self.props)
+        pair_key_map = {}
+        for item in detection_range:
+            a, b = item.split("-")
+            pair_key_map[(self.part_objs.get(a), self.part_objs.get(b))] = item
+        pairs = list(pair_key_map.keys())
+
+        # 帧范围要在切换场景前读，换场景后读到的会是新场景的默认值
+        frame_start = self.original_scene.frame_start
+        frame_end = self.original_scene.frame_end
+        self.total_frames = frame_end - frame_start + 1
+        # 每 1% 对应多少帧（至少 1 帧），后面用取模判断什么时候刷新进度
+        self.frames_per_percent = max(self.total_frames // 100, 1)
+
         # 新建空白场景，避免 Dependency graph 计算
         bpy.ops.scene.new(type='NEW')
-        tmp_scene = bpy.context.scene
+        self.tmp_scene = bpy.context.scene
+        self.sync_scene_range(self.original_scene, self.tmp_scene)
         # 恢复集合及内部网格的显示
         get_collection(TMP_ANALYSIS_COLLECTION_NAME)
 
-        detection_range = get_ordered_detection_range(props)
-        pair_key_map = {}
-        for r in detection_range:
-            a, b = r.split("-")
-            pair_key_map[(part_objs.get(a), part_objs.get(b))] = r
+        self.generator = iter_detect_collisions(pairs, frame_start, frame_end, pair_names=pair_key_map)
 
-        pairs = list(pair_key_map.keys())
+        # 先亮一个 0%，让用户看到「已经开始了」，而不是停在初始化那一条上
+        self.percent = 0
+        set_detection_progress(True, 0.0, f"检测中 0%（0/{self.total_frames} 帧）")
 
-        merged, frame_hits = detect_collisions_between_objects(pairs, frame_start, frame_end, pair_names=pair_key_map)
+    @staticmethod
+    def sync_scene_range(source, target):
+        """临时场景的时间范围跟原场景保持一致"""
+        target.name = "穿模检测临时场景"
+        target.frame_start = source.frame_start
+        target.frame_end = source.frame_end
 
-        # 注意要用 original_scene：上面 scene.new 之后当前场景已经变了
-        props = original_scene.mmd_motion_tools_detect_clipping
+    def step_detection(self):
+        """逐帧推进检测，跑完返回 True"""
+        if self.generator is None:
+            self.start_detection()
+
+        processed = 0
+
+        while True:
+            try:
+                index, total = next(self.generator)
+            except StopIteration as stop:
+                # 生成器正常结束时会 return (merged, frame_hits)
+                self.merged, self.frame_hits = stop.value or ({}, {})
+                return True
+
+            processed += 1
+
+            # 取模判断：走到「1% 的整数倍」或最后一帧才交还控制权刷新进度，
+            # 其余帧继续埋头干，免得每帧都来回切一次
+            if index % self.frames_per_percent and index != total:
+                # 兜底：单帧再慢也不能一直占着主线程
+                if processed >= MAX_FRAMES_PER_STEP:
+                    return False
+                continue
+
+            percent = round(index / total * 100)
+            if percent == self.percent:
+                continue
+
+            self.percent = percent
+            # 进度条只反映检测进度：已完成帧数占总帧数的比例，初始化不占份额
+            set_detection_progress(
+                True,
+                percent / 100,
+                f"检测中 {percent}%（{index}/{total} 帧）")
+            return False
+
+    def finish(self, context):
+        """写入结果并收拾临时场景、临时对象"""
+        if self.timer is not None:
+            context.window_manager.event_timer_remove(self.timer)
+            self.timer = None
+
+        props = self.props
+        merged = self.merged
+
         props.clippings.clear()
         total_frames = 0
         for (seg_start, seg_end), names in merged.items():
@@ -237,30 +421,52 @@ class ClippingDetectionOperator(bpy.types.Operator):
             total_frames += seg_end - seg_start + 1
 
         # 逐帧结果也存一份，列表可以按当前帧显示更精确的穿模类型
-        set_frame_hits(props, frame_hits)
+        set_frame_hits(props, self.frame_hits)
+
+        self.restore_scene()
+
+        # 临时部件代理网格按开关删除；中间产生的孤立数据块每次都要清，
+        # 因为代理网格里已经不含形态键，留着也不会被用到
+        if props.remove_tmp:
+            remove_part_meshes(self.tmp_col, self.part_objs.values(), True)
+        purge_temp_datablocks(self.mesh_pointers_before, self.key_pointers_before)
+
+        # 恢复选择状态
+        select_only_objects(context, self.selected_before)
+        if self.active_before is not None:
+            self.view_layer.objects.active = self.active_before
+
+        set_detection_progress(False)
 
         if not merged:
             self.report({'INFO'}, '未检测到穿模!')
         else:
             self.report({'INFO'}, f'检测到 {len(merged)} 段穿模，共 {total_frames} 帧')
 
-        # 恢复原场景并删除临时场景
-        bpy.context.window.scene = original_scene
-        bpy.data.scenes.remove(tmp_scene)
+        print(f"总耗时: {time.perf_counter() - self.start_time:.4f} 秒")
 
-        # 临时部件代理网格按开关删除；中间产生的孤立数据块每次都要清，
-        # 因为代理网格里已经不含形态键，留着也不会被用到
-        if props.remove_tmp:
-            remove_part_meshes(tmp_col, part_objs.values(), True)
-        purge_temp_datablocks(mesh_pointers_before, key_pointers_before)
+    def restore_scene(self):
+        """切回原场景并删除临时场景"""
+        if self.tmp_scene is None:
+            return
+        if bpy.context.window is not None:
+            bpy.context.window.scene = self.original_scene
+        bpy.data.scenes.remove(self.tmp_scene)
+        self.tmp_scene = None
 
-        # 恢复选择状态
-        select_only_objects(context, selected_before)
-        if active_before is not None:
-            view_layer.objects.active = active_before
-
-        print(f"总耗时: {time.perf_counter() - start_time:.4f} 秒")
-        return True
+    def abort(self, context):
+        """异常时收拾现场：切回原场景、恢复选择、关掉进度条"""
+        try:
+            if self.timer is not None:
+                context.window_manager.event_timer_remove(self.timer)
+                self.timer = None
+            self.restore_scene()
+            if self.view_layer is not None:
+                select_only_objects(context, self.selected_before)
+                if self.active_before is not None:
+                    self.view_layer.objects.active = self.active_before
+        finally:
+            set_detection_progress(False)
 
 
 class ResetDetectionRangeOperator(bpy.types.Operator):
@@ -782,10 +988,13 @@ def get_bvh_for(obj, depsgraph):
     return mathutils.bvhtree.BVHTree.FromObject(obj_eval, depsgraph)
 
 
-@timeit
-def detect_collisions_between_objects(pairs, start, end, merge_on_type_change=True, pair_names=None):
+def iter_detect_collisions(pairs, start, end, merge_on_type_change=True, pair_names=None):
     """
-    逐帧检测各部件代理网格之间是否相交
+    逐帧检测各部件代理网格之间是否相交（生成器版本）
+
+    每处理完一帧就 yield 一次 (已处理帧数, 总帧数)，让调用方有机会把控制权还给
+    Blender 刷新界面；检测结束时的返回值是 (merged, frame_hits)，
+    从 StopIteration.value 里取。同步版本见 detect_collisions_between_objects。
 
     实测（250 帧，250 个无关网格全程保留）：
         scene.frame_set(f)                          1.010 s
@@ -794,10 +1003,11 @@ def detect_collisions_between_objects(pairs, start, end, merge_on_type_change=Tr
     """
     scene = bpy.context.scene
 
-    # 逐帧结果：frame -> [穿模类型, ...]
+    # 逐帧结果：frame -> [穿模类型, ...]（同一帧里命中的多个部件对都会收进来）
     frame_hits = {}
+    total = end - start + 1
 
-    for frame in range(start, end + 1):
+    for index, frame in enumerate(range(start, end + 1), start=1):
         # 直接修改scene.frame_current确实不会触发完整的数据更新，但frame_set()的开销太大，而在当前场景下，两者获取的数据一致。
         scene.frame_current = frame
         deps = bpy.context.evaluated_depsgraph_get()
@@ -823,12 +1033,19 @@ def detect_collisions_between_objects(pairs, start, end, merge_on_type_change=Tr
                 name = pair_names.get((obj_a, obj_b)) if pair_names else None
                 frame_hits.setdefault(frame, []).append(name)
 
+        yield index, total
+
+    merged = merge_frame_hits(frame_hits, merge_on_type_change)
+    return merged, frame_hits
+
+
+def merge_frame_hits(frame_hits, merge_on_type_change=True):
+    """把逐帧结果 {帧: [名称]} 压成连续区间 {(起始帧, 结束帧): [名称]}"""
     merged = {}
     seg_start = None
     seg_end = None
     seg_names = None
 
-    # 合并连续帧：把 {帧: [名称]} 压成 {(start, end): [名称]}
     for frame in sorted(frame_hits):
         names = frame_hits[frame]
 
@@ -853,7 +1070,18 @@ def detect_collisions_between_objects(pairs, start, end, merge_on_type_change=Tr
     if seg_start is not None:
         merged[(seg_start, seg_end)] = seg_names
 
-    return merged, frame_hits
+    return merged
+
+
+@timeit
+def detect_collisions_between_objects(pairs, start, end, merge_on_type_change=True, pair_names=None):
+    """同步跑完整个检测，返回 (merged, frame_hits)；分片执行请用 iter_detect_collisions"""
+    generator = iter_detect_collisions(pairs, start, end, merge_on_type_change, pair_names)
+    while True:
+        try:
+            next(generator)
+        except StopIteration as stop:
+            return stop.value
 
 
 def get_breast_bones(armature):

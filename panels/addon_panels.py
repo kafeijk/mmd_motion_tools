@@ -1,7 +1,7 @@
 from ..operators.bone_operators import SimplifyBoneOperator, FlipPoseOperator, SelectLinkedBoneOperator
 from ..operators.camera_motion_fixer_operators import FindCameraSegmentOperator, CameraMotionFixerOperator
 from ..operators.clipping_detection_operators import ClippingDetectionOperator, ClearClippingOperator, \
-    ResetDetectionRangeOperator, ShowClippingTypeOperator
+    ResetDetectionRangeOperator, ShowClippingTypeOperator, get_detection_progress
 from ..operators.hand_shell_operators import GenerateHandShellOperator
 from ..operators.motion_fixer_operators import MotionFixerOperator, SyncRangeOperator, RemoveOuterKeyframesOperator, \
     RemoveInnerKeyframesOperator, DeselectKeyframesOperator
@@ -113,6 +113,13 @@ class ClippingDetection_PT_Panel(bpy.types.Panel):
         col.prop(props, "show_detection_range")
         col.prop(props, "remove_tmp")
         col.operator(ClippingDetectionOperator.bl_idname, text=ClippingDetectionOperator.bl_label)
+
+        progress = get_detection_progress()
+        if progress["active"]:
+            if hasattr(col, "progress"):
+                col.progress(factor=progress["factor"], type='BAR', text=progress["text"])
+            else:
+                col.label(text=progress["text"])
 
         if len(props.clippings) != 0:
             rows = min(len(props.clippings), 5)
