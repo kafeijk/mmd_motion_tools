@@ -361,12 +361,23 @@ class ClippingDetectionOperator(bpy.types.Operator):
         self.percent = 0
         set_detection_progress(True, 0.0, f"检测中 0%（0/{self.total_frames} 帧）")
 
-    @staticmethod
-    def sync_scene_range(source, target):
-        """临时场景的时间范围跟原场景保持一致"""
+    @classmethod
+    def sync_scene_range(cls, source, target):
+        """临时场景的时间范围和面板参数跟原场景保持一致"""
         target.name = "穿模检测临时场景"
         target.frame_start = source.frame_start
         target.frame_end = source.frame_end
+
+        source_props = source.mmd_motion_tools_detect_clipping
+        target_props = target.mmd_motion_tools_detect_clipping
+
+        target_props.proxy_accuracy = source_props.proxy_accuracy
+        target_props.show_detection_range = source_props.show_detection_range
+        target_props.remove_tmp = source_props.remove_tmp
+
+        # custom_bones_str 的 update 会自动勾上「自定义拓展」那几项，所以它先写；
+        target_props.custom_bones_str = source_props.custom_bones_str
+        target_props.detection_range = source_props.detection_range
 
     def step_detection(self):
         """逐帧推进检测，跑完返回 True"""
