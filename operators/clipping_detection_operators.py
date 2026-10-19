@@ -1147,7 +1147,11 @@ def remove_part_meshes(tmp_col, tmp_objs=None, remove_empty_collection=False):
     for part_obj in tmp_objs or ():
         if part_obj is None:
             continue
-        pointer = part_obj.as_pointer()
+        try:
+            pointer = part_obj.as_pointer()
+        except ReferenceError:
+            # 已经被删掉了（重复清理时会出现），跳过
+            continue
         if pointer not in seen:
             seen.add(pointer)
             targets.append(part_obj)

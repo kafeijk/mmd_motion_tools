@@ -1335,11 +1335,23 @@ def select_only_objects(context, objects):
     view_layer = context.view_layer
     try:
         # https://docs.blender.org/api/current/bpy.types.ViewLayer.html#bpy.types.ViewLayer.objects
+        # 刚删掉的对象可能还挂在 view_layer.objects 里（后台同步执行时没有帧间更新），
+        # 遍历会拿到 None 或已失效的引用，这里逐个跳过
         for obj in view_layer.objects:
-            if obj.select_get():
-                obj.select_set(False)
+            if obj is None:
+                continue
+            try:
+                if obj.select_get():
+                    obj.select_set(False)
+            except ReferenceError:
+                continue
         for obj in objects:
-            obj.select_set(True)
+            if obj is None:
+                continue
+            try:
+                obj.select_set(True)
+            except ReferenceError:
+                continue
         if objects:
             view_layer.objects.active = objects[-1]
     except RuntimeError:
