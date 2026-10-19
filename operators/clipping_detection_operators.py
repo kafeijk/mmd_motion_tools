@@ -228,6 +228,8 @@ class ClippingDetectionOperator(bpy.types.Operator):
         self.tmp_scene = None
         self.timer = None
         self.flush_count = 0
+        # 进入临时场景前的着色方式（area 指针 -> 'SOLID'/'MATERIAL'/...）
+        self.shading_before = {}
 
         # 记录选择状态
         view_layer = context.view_layer
@@ -300,7 +302,7 @@ class ClippingDetectionOperator(bpy.types.Operator):
             self.stage = STAGE_DETECT
             return False
 
-        return self.step_detection()
+        return self.step_detection(context)
 
     def init_temp_objects(self, context):
         """初始化：复制并合并模型网格，再按顶点组划分出各部件代理网格"""
@@ -332,7 +334,7 @@ class ClippingDetectionOperator(bpy.types.Operator):
         part_vertices = classify_vertices(self.tmp_obj, part_vgs)
         return create_part_meshes(self.props, self.tmp_obj, part_vertices, self.tmp_col)
 
-    def start_detection(self):
+    def start_detection(self, context):
         """切到空白场景并建好逐帧生成器（不动原场景，避免依赖图整体重算）"""
         detection_range = get_ordered_detection_range(self.props)
         pair_key_map = {}
@@ -352,6 +354,8 @@ class ClippingDetectionOperator(bpy.types.Operator):
         bpy.ops.scene.new(type='NEW')
         self.tmp_scene = bpy.context.scene
         self.sync_scene_range(self.original_scene, self.tmp_scene)
+        # 跳过来之后切成实体模式
+        self.set_solid_shading(context)
         # 恢复集合及内部网格的显示
         get_collection(TMP_ANALYSIS_COLLECTION_NAME)
 
@@ -379,10 +383,10 @@ class ClippingDetectionOperator(bpy.types.Operator):
         target_props.custom_bones_str = source_props.custom_bones_str
         target_props.detection_range = source_props.detection_range
 
-    def step_detection(self):
+    def step_detection(self, context):
         """逐帧推进检测，跑完返回 True"""
         if self.generator is None:
-            self.start_detection()
+            self.start_detection(context)
 
         processed = 0
 
@@ -437,7 +441,7 @@ class ClippingDetectionOperator(bpy.types.Operator):
         # 逐帧结果也存一份，列表可以按当前帧显示更精确的穿模类型
         set_frame_hits(props, self.frame_hits)
 
-        self.restore_scene()
+        self.restore_scene(context)
 
         # 临时部件代理网格按开关删除；中间产生的孤立数据块每次都要清，
         # 因为代理网格里已经不含形态键，留着也不会被用到
@@ -457,14 +461,41 @@ class ClippingDetectionOperator(bpy.types.Operator):
 
         print(f"总耗时: {time.perf_counter() - self.start_time:.4f} 秒")
 
-    def restore_scene(self):
-        """切回原场景并删除临时场景"""
+    def restore_scene(self, context):
+        """切回原场景、恢复着色方式，并删除临时场景"""
         if self.tmp_scene is None:
             return
         if bpy.context.window is not None:
             bpy.context.window.scene = self.original_scene
         bpy.data.scenes.remove(self.tmp_scene)
         self.tmp_scene = None
+        self.restore_shading(context)
+
+    @staticmethod
+    def view3d_areas(context):
+        """当前窗口里的所有 3D 视图区域（后台也有，只是不会真的绘制）"""
+        window = getattr(context, "window", None)
+        if window is None or window.screen is None:
+            return []
+        return [area for area in window.screen.areas if area.type == 'VIEW_3D']
+
+    def set_solid_shading(self, context):
+        """把 3D 视图切成实体模式，并记下原来的着色方式"""
+        self.shading_before = {}
+        for area in self.view3d_areas(context):
+            shading = area.spaces.active.shading
+            self.shading_before[area.as_pointer()] = shading.type
+            shading.type = 'SOLID'
+
+    def restore_shading(self, context):
+        """把进入临时场景前的着色方式恢复回去"""
+        if not self.shading_before:
+            return
+        for area in self.view3d_areas(context):
+            previous = self.shading_before.get(area.as_pointer())
+            if previous is not None:
+                area.spaces.active.shading.type = previous
+        self.shading_before = {}
 
     def clean_tmp_data(self, remove_objects):
         """
@@ -483,7 +514,7 @@ class ClippingDetectionOperator(bpy.types.Operator):
             if self.timer is not None:
                 context.window_manager.event_timer_remove(self.timer)
                 self.timer = None
-            self.restore_scene()
+            self.restore_scene(context)
             self.clean_tmp_data(remove_objects=True)
             if self.view_layer is not None:
                 select_only_objects(context, self.selected_before)
