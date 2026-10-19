@@ -222,6 +222,9 @@ class ClippingDetectionOperator(bpy.types.Operator):
         self.tmp_col = None
         self.tmp_obj = None
         self.part_objs = {}
+        # 执行前已存在的网格/形态键数据块，清理时只动这次新建的
+        self.mesh_pointers_before = None
+        self.key_pointers_before = None
         self.tmp_scene = None
         self.timer = None
         self.flush_count = 0
@@ -427,9 +430,7 @@ class ClippingDetectionOperator(bpy.types.Operator):
 
         # 临时部件代理网格按开关删除；中间产生的孤立数据块每次都要清，
         # 因为代理网格里已经不含形态键，留着也不会被用到
-        if props.remove_tmp:
-            remove_part_meshes(self.tmp_col, self.part_objs.values(), True)
-        purge_temp_datablocks(self.mesh_pointers_before, self.key_pointers_before)
+        self.clean_tmp_data(remove_objects=props.remove_tmp)
 
         # 恢复选择状态
         select_only_objects(context, self.selected_before)
@@ -454,13 +455,25 @@ class ClippingDetectionOperator(bpy.types.Operator):
         bpy.data.scenes.remove(self.tmp_scene)
         self.tmp_scene = None
 
+    def clean_tmp_data(self, remove_objects):
+        """
+        收拾临时数据
+
+        remove_objects=True 时删掉本次建的临时对象（合并网格 + 各部件代理）和空掉的临时集合；
+        无论哪种情况都清掉这次新产生、已经没人用的孤立网格/形态键数据块。
+        """
+        if remove_objects and self.tmp_col is not None:
+            remove_part_meshes(self.tmp_col, self.part_objs.values(), True)
+        purge_temp_datablocks(self.mesh_pointers_before, self.key_pointers_before)
+
     def abort(self, context):
-        """异常时收拾现场：切回原场景、恢复选择、关掉进度条"""
+        """取消（ESC）或异常时收拾现场"""
         try:
             if self.timer is not None:
                 context.window_manager.event_timer_remove(self.timer)
                 self.timer = None
             self.restore_scene()
+            self.clean_tmp_data(remove_objects=True)
             if self.view_layer is not None:
                 select_only_objects(context, self.selected_before)
                 if self.active_before is not None:
