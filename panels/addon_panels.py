@@ -112,7 +112,10 @@ class ClippingDetection_PT_Panel(bpy.types.Panel):
 
         col.prop(props, "show_detection_range")
         col.prop(props, "remove_tmp")
-        col.operator(ClippingDetectionOperator.bl_idname, text=ClippingDetectionOperator.bl_label)
+        row = col.row(align=True)
+        row.operator(ClippingDetectionOperator.bl_idname, text=ClippingDetectionOperator.bl_label)
+        if len(props.clippings) != 0:
+            row.operator(ClearClippingOperator.bl_idname, text=ClearClippingOperator.bl_label)
 
         progress = get_detection_progress()
         if progress["active"]:
@@ -124,7 +127,6 @@ class ClippingDetection_PT_Panel(bpy.types.Panel):
         if len(props.clippings) != 0:
             rows = min(len(props.clippings), 5)
             col.template_list("MMD_UL_ClippingRange", "", props, "clippings", props, "clipping_index", rows=rows)
-            col.operator(ClearClippingOperator.bl_idname, text=ClearClippingOperator.bl_label)
 
 
 class FindRepeatedMotion_PT_Panel(bpy.types.Panel):
