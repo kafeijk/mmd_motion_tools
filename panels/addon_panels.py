@@ -151,14 +151,14 @@ class FindRepeatedMotion_PT_Panel(bpy.types.Panel):
             col.template_list("MMD_UL_RepeatedRange", "", props, "repeated", props, "repeated_index", rows=rows)
 
         row = col.row(align=True)
-        row.operator(FindRepeatedMotionOperator.bl_idname, text=FindRepeatedMotionOperator.bl_label)
-        row.operator(FindRepeatedMotionStrongOperator.bl_idname, text=FindRepeatedMotionStrongOperator.bl_label)
+        # 有结果时两个查找按钮先禁用（免得白跑一遍），同时把「清除」露出来；
+        # 没结果时「清除」不占位置，面板保持干净
+        find_row = row.row(align=True)
+        find_row.enabled = len(props.repeated) == 0
+        find_row.operator(FindRepeatedMotionOperator.bl_idname, text=FindRepeatedMotionOperator.bl_label)
+        find_row.operator(FindRepeatedMotionStrongOperator.bl_idname, text=FindRepeatedMotionStrongOperator.bl_label)
         if len(props.repeated) != 0:
-            row.enabled = False
-        else:
-            row.enabled = True
-        row = col.row(align=True)
-        row.operator(ClearRepeatedOperator.bl_idname, text=ClearRepeatedOperator.bl_label)
+            row.operator(ClearRepeatedOperator.bl_idname, text=ClearRepeatedOperator.bl_label)
 
 
 class MotionFixer_PT_Panel(bpy.types.Panel):
