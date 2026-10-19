@@ -1115,6 +1115,13 @@ def create_part_meshes(props, obj, part_vertices, col):
     bpy.ops.object.modifier_copy_to_selected(modifier="mmd_armature")
 
     bpy.data.objects.remove(obj, do_unlink=True)
+
+    # 7. 平滑着色（用自动平滑着色，每帧多算一遍法线，耗时约 +20%）
+    for part_obj in part_objs.values():
+        polygons = part_obj.data.polygons
+        polygons.foreach_set("use_smooth", [True] * len(polygons))
+        part_obj.data.update()
+
     return part_objs
 
 
