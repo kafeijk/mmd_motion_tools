@@ -221,7 +221,9 @@ class ClippingDetectionOperator(bpy.types.Operator):
         self.frame_hits = {}
         self.tmp_col = None
         self.tmp_obj = None
+        self.tmp_armature = None
         self.part_objs = {}
+        self.part_vgs = {}
         # 执行前已存在的网格/形态键数据块，清理时只动这次新建的
         self.mesh_pointers_before = None
         self.key_pointers_before = None
@@ -318,6 +320,15 @@ class ClippingDetectionOperator(bpy.types.Operator):
         self.tmp_obj = create_tmp_obj(context, self.objects, tmp_col)
         self.part_objs = self.create_part_objects()
 
+        # create_part_meshes 最后会把合并出来的临时网格删掉，这里别留悬空引用
+        self.tmp_obj = None
+
+        # 临时网格改用精简过的临时骨架：原骨架里大部分骨骼跟检测无关，
+        part_objs = list(self.part_objs.values())
+        self.tmp_armature = create_tmp_armature(
+            context, self.armature, tmp_col, part_objs, self.part_vgs)
+        repoint_armature_modifiers(part_objs, self.tmp_armature)
+
     def create_part_objects(self):
         """按顶点组划分身体部件，生成各部件代理网格，返回 {部件: 代理网格}"""
         part_vgs = copy.deepcopy(PART_VGS)
@@ -330,6 +341,9 @@ class ClippingDetectionOperator(bpy.types.Operator):
         custom_vgs = split_names(self.props.custom_bones_str)
         if custom_vgs:
             part_vgs["CUSTOM"] = custom_vgs
+
+        # 临时骨架判断「哪些骨骼有用」时要用这份定义
+        self.part_vgs = part_vgs
 
         part_vertices = classify_vertices(self.tmp_obj, part_vgs)
         return create_part_meshes(self.props, self.tmp_obj, part_vertices, self.tmp_col)
@@ -358,6 +372,8 @@ class ClippingDetectionOperator(bpy.types.Operator):
         self.set_solid_shading(context)
         # 恢复集合及内部网格的显示
         get_collection(TMP_ANALYSIS_COLLECTION_NAME)
+        # hide_set 是按视图层生效的，新场景的视图层里再藏一次
+        self.tmp_armature.hide_set(True)
 
         self.generator = iter_detect_collisions(pairs, frame_start, frame_end, pair_names=pair_key_map)
 
@@ -677,6 +693,151 @@ def apply_shape_key_mix(obj):
     obj.shape_key_clear()
 
 
+# 找「整条骨链」的起点：这两根骨骼的兄弟骨骼通常是 IK 骨骼
+CHAIN_ROOT_NAMES = ("全ての親", "センター")
+
+# 名字里带这些标记的骨骼即使没有权重也保留（和「付与親」相关）
+KEEP_BONE_KEYWORDS = ("_dummy_", "_shadow_")
+
+
+def get_weighted_bone_names(mesh_objects):
+    """临时网格上真正带权重的骨骼名（哪怕权重很小也算）"""
+    names = set()
+    for obj in mesh_objects:
+        group_names = {vertex_group.index: vertex_group.name for vertex_group in obj.vertex_groups}
+        for vertex in obj.data.vertices:
+            for element in vertex.groups:
+                if element.weight > 0.0:
+                    names.add(group_names.get(element.group))
+    names.discard(None)
+    return names
+
+
+def get_ancestor_bone_names(armature, bone_names):
+    """这些骨骼的所有父级 / 祖先骨骼"""
+    names = set()
+    for name in bone_names:
+        bone = armature.data.bones.get(name)
+        while bone is not None:
+            names.add(bone.name)
+            bone = bone.parent
+    return names
+
+
+def get_sibling_chain_bone_names(armature, root_names=CHAIN_ROOT_NAMES):
+    """
+    「全ての親」「センター」的兄弟骨骼，以及它们整条骨链
+
+    这些兄弟骨骼一般是 IK 骨（足IK 之类）：不带权重但驱动别的骨骼，删掉姿态就变了。
+    """
+    bones = armature.data.bones
+    names = set()
+
+    for root_name in root_names:
+        root = bones.get(root_name)
+        if root is None:
+            continue
+
+        if root.parent is not None:
+            siblings = [child for child in root.parent.children if child.name != root.name]
+        else:
+            # 根骨骼没有父级时，和它平级的只有其它顶层骨骼
+            siblings = [bone for bone in bones if bone.parent is None and bone.name != root.name]
+
+        for sibling in siblings:
+            stack = [sibling]
+            while stack:
+                bone = stack.pop()
+                if bone.name in names:
+                    continue
+                names.add(bone.name)
+                stack.extend(bone.children)
+
+    return names
+
+
+def get_useful_bone_names(armature, mesh_objects, part_vgs):
+    """
+    临时骨架要保留的骨骼
+
+    1. 各部件定义里的顶点组名对应的骨骼（顶点组名就是骨骼名）
+    2. 这些骨骼的全部父级 / 祖先
+    3. 「全ての親」「センター」的兄弟骨骼的整条骨链（IK 骨骼）
+    4. 名字含 _dummy_ / _shadow_ 的骨骼（和「付与親」相关）
+    5. 其它在临时网格上带权重的骨骼（权重很小也算）
+    """
+    bone_names = {name for names in part_vgs.values() for name in names}
+    bone_names |= get_weighted_bone_names(mesh_objects)
+    bone_names |= {
+        bone.name for bone in armature.data.bones
+        if any(keyword in bone.name for keyword in KEEP_BONE_KEYWORDS)
+    }
+    bone_names |= get_sibling_chain_bone_names(armature)
+
+    # 祖先必须一起保留，否则骨链会断
+    return bone_names | get_ancestor_bone_names(armature, bone_names)
+
+
+def retarget_armature_self_references(tmp_armature, source_armature):
+    """把约束里指向原骨架的引用改成指向临时骨架"""
+    for pose_bone in tmp_armature.pose.bones:
+        for constraint in pose_bone.constraints:
+            if getattr(constraint, "target", None) == source_armature:
+                constraint.target = tmp_armature
+
+
+def create_tmp_armature(context, armature, tmp_col, mesh_objects, part_vgs):
+    """
+    复制一份骨架作为临时对象的目标骨架，并删掉用不到的骨骼
+
+    保留 / 删除的骨骼数记在临时骨架的自定义属性上，方便排查。
+    """
+    tmp_armature = armature.copy()
+    tmp_armature.data = armature.data.copy()
+    tmp_armature.name = f"{armature.name}_tmp"
+    tmp_armature.data.name = f"{armature.data.name}_tmp"
+    tmp_armature[TMP_OBJECT_TAG] = True
+
+    # 不挂在原模型的层级下，只要世界矩阵一致就行
+    tmp_armature.parent = None
+    tmp_armature.matrix_world = armature.matrix_world.copy()
+    tmp_col.objects.link(tmp_armature)
+    retarget_armature_self_references(tmp_armature, armature)
+
+    useful_names = get_useful_bone_names(armature, mesh_objects, part_vgs)
+
+    ensure_object_mode(context)
+    select_only_objects(context, [tmp_armature])
+    context.view_layer.objects.active = tmp_armature
+    bpy.ops.object.mode_set(mode='EDIT')
+    edit_bones = tmp_armature.data.edit_bones
+    removed = 0
+    for edit_bone in list(edit_bones):
+        if edit_bone.name in useful_names:
+            continue
+        edit_bones.remove(edit_bone)
+        removed += 1
+    # 必须在编辑模式里数：切回物体模式后 edit_bones 就空了
+    kept = len(edit_bones)
+    bpy.ops.object.mode_set(mode='OBJECT')
+
+    tmp_armature["kept_bones"] = kept
+    tmp_armature["removed_bones"] = removed
+
+    # 隐藏临时骨架，避免干扰用户观察
+    tmp_armature.select_set(False)
+    tmp_armature.hide_set(True)
+    return tmp_armature
+
+
+def repoint_armature_modifiers(mesh_objects, tmp_armature):
+    """把临时网格的骨架修改器指向临时骨架"""
+    for obj in mesh_objects:
+        for modifier in obj.modifiers:
+            if modifier.type == 'ARMATURE':
+                modifier.object = tmp_armature
+
+
 @timeit
 def create_tmp_obj(context, objects, tmp_col):
     copied_objs = []
@@ -981,15 +1142,22 @@ def remove_part_meshes(tmp_col, tmp_objs=None, remove_empty_collection=False):
             targets.append(obj)
 
     if targets:
-        doomed = [(obj, obj.data if obj.type == 'MESH' else None) for obj in targets]
+        # 连带记下网格 / 骨架数据块：删对象不会删数据，users 归零时要手动清掉
+        doomed = [
+            (obj, obj.data if obj.type in {'MESH', 'ARMATURE'} else None)
+            for obj in targets
+        ]
 
-        for obj, _mesh in doomed:
+        for obj, _data in doomed:
             bpy.data.objects.remove(obj, do_unlink=True)
 
-        for _obj, mesh in doomed:
-            # 删除对象不会连带删除网格数据，users 归零时手动清掉，避免残留孤儿数据
-            if mesh is not None and mesh.users == 0:
-                bpy.data.meshes.remove(mesh)
+        for _obj, data in doomed:
+            if data is None or data.users != 0:
+                continue
+            if data.id_type == 'MESH':
+                bpy.data.meshes.remove(data)
+            elif data.id_type == 'ARMATURE':
+                bpy.data.armatures.remove(data)
 
     if not remove_empty_collection:
         return
