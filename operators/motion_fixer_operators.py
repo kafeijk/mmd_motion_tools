@@ -367,20 +367,26 @@ def remove_inner_keys(fcurves, frame_start, frame_end):
     """删除指定范围内部的关键帧，保留范围两端关键帧"""
     fcurves = list(fcurves)
 
+    # 每条曲线在这个区间里「有没有真的删掉键」：删过的形状已经没意义，拉成直线
+    removed_flags = []
+
     for fc in fcurves:
+        removed = False
         for i in range(len(fc.keyframe_points) - 1, -1, -1):
             kp = fc.keyframe_points[i]
             frame = int(kp.co[0])
 
             if frame_start < frame < frame_end:
                 fc.keyframe_points.remove(kp)
+                removed = True
+        removed_flags.append(removed)
 
     for fc in fcurves:
         fc.update()
 
-    # 差值方式改为线性
-    for fc in fcurves:
-        smooth_key_transition(fc, [(frame_start, frame_end)])
+    # 过渡统一成贝塞尔：删过键的拉成共线直线，没删过的保持原有曲线
+    for fc, removed in zip(fcurves, removed_flags):
+        smooth_key_transition(fc, [(frame_start, frame_end)], straight=removed)
 
     # 刷新场景以更新视图
     bpy.context.scene.frame_set(bpy.context.scene.frame_current)

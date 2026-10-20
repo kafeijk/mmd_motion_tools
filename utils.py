@@ -8,6 +8,11 @@ import addon_utils
 import bpy
 from mathutils import Quaternion, Vector, Euler
 
+# MMD 默认的贝塞尔控制点（20/127、107/127）：两点都落在弦上，曲线即为直线
+STRAIGHT_HANDLE_START = 20 / 127
+STRAIGHT_HANDLE_END = 107 / 127
+
+
 # -------------------------------------------------------------
 # 特定用途骨骼
 # -------------------------------------------------------------
@@ -1132,6 +1137,12 @@ def apply_transform(obj, data_path, offset, frame_start, frame_end, current_valu
             if kp:
                 set_keyframe_value(kp, value[index])
 
+    # 改值后手柄只做了整体平移，绝对偏差留在原处；段两端的值一变，
+    # 旧偏差就可能落到值域之外，曲线会先减后增地冲出区间（抽搐）
+    modified = set(frame_keys)
+    for fc in fcurve_map.values():
+        clamp_handle_offsets(fc, modified)
+
     for fc in fcurve_map.values():
         fc.update()
 
@@ -1148,47 +1159,104 @@ def set_keyframe_value(kp, value):
     kp.handle_right.y += offset
 
 
+def clamp_handle_offsets(fc, frames):
+    """把手柄夹回所在段的值域内（只处理端点值变过的段）
+
+    贝塞尔手柄是绝对坐标，改值时只做整体平移，相对偏差原样保留。
+    段两端的值一旦变化，旧偏差就可能落到 [左键值, 右键值] 之外，
+    曲线于是先减后增（或先增后减）地冲出区间，看起来就是抽搐。
+    MMD 的控制点按段归一化（y1、y2 在 0~127），天生不会这样，这里补上同样的约束。
+    """
+    points = fc.keyframe_points
+    for i in range(len(points) - 1):
+        left_key, right_key = points[i], points[i + 1]
+        if int(left_key.co[0]) not in frames and int(right_key.co[0]) not in frames:
+            continue
+        low, high = sorted((left_key.co[1], right_key.co[1]))
+        for key, attr in ((left_key, "handle_right"), (right_key, "handle_left")):
+            handle = getattr(key, attr)
+            value = min(max(handle.y, low), high)
+            if abs(value - handle.y) > 1e-9:
+                handle.y = value
+                setattr(key, attr, handle)
+
+
 def remove_margin_keys(fcurves, frame_start, frame_end, margin, update=True):
     """删除范围边缘的关键帧"""
+    fcurves = list(fcurves)
     for fc in fcurves:
         fc.update()
 
     # 当前曲线最小关键帧
     min_frame = min(int(kp.co[0]) for fc in fcurves for kp in fc.keyframe_points)
 
+    spans = [
+        (frame_start - margin, frame_start),
+        (frame_end, frame_end + margin),
+    ]
+    # 每条曲线在这两个区间里「有没有真的删掉键」：删过的形状已经没意义，拉成直线
+    removed_flags = []
+
     for fc in fcurves:
+        flags = [False, False]
         for i in range(len(fc.keyframe_points) - 1, -1, -1):
             kp = fc.keyframe_points[i]
             frame = int(kp.co[0])
             if frame == min_frame:
                 continue
-            if frame_start - margin <= frame < frame_start or frame_end < frame <= frame_end + margin:
+            if frame_start - margin <= frame < frame_start:
                 fc.keyframe_points.remove(kp)
+                flags[0] = True
+            elif frame_end < frame <= frame_end + margin:
+                fc.keyframe_points.remove(kp)
+                flags[1] = True
+        removed_flags.append(flags)
 
     for fc in fcurves:
         fc.update()
 
-    # 差值方式改为平滑
-    for fc in fcurves:
-        smooth_key_transition(
-            fc,
-            [
-                (frame_start - margin, frame_start),
-                (frame_end, frame_end + margin),
-            ]
-        )
+    # 过渡统一成贝塞尔：该区间删过键的拉成共线直线，没删过的保持原有曲线
+    for fc, flags in zip(fcurves, removed_flags):
+        for span, removed in zip(spans, flags):
+            smooth_key_transition(fc, [span], straight=removed)
 
     # 刷新场景以更新视图
     if update:
         bpy.context.scene.frame_set(bpy.context.scene.frame_current)
 
 
-def smooth_key_transition(fc, frame_pairs):
-    """设置指定关键帧之间为线性过渡"""
+def smooth_key_transition(fc, frame_pairs, straight=False):
+    """
+    把指定关键帧之间的过渡统一成贝塞尔
+
+    straight=False：保持关键帧原有的控制杆，曲线形状不变
+    straight=True ：把控制点摆到弦上（MMD 默认的 20/127、107/127），
+                    控制点共线时贝塞尔数学上就是直线，看着像线性但类型仍是 BEZIER，
+                    之后想调形状直接拖手柄即可
+    """
     for left_frame, right_frame in frame_pairs:
-        left_key, _ = find_adjacent_keys(fc, left_frame, right_frame)
-        if left_key:
-            left_key.interpolation = 'LINEAR'
+        left_key, right_key = find_adjacent_keys(fc, left_frame, right_frame)
+        if not left_key:
+            continue
+
+        left_key.interpolation = 'BEZIER'
+
+        if not straight or right_key is None:
+            continue
+
+        delta = right_key.co - left_key.co
+        # co.x 帧数；co.y 值
+        if abs(delta.x) < 1e-6:
+            continue
+
+        # x、y 同乘一个系数：偏移量 = 弦向量 × 系数，控制点必落在两键连线上
+        left_key.handle_right_type = 'FREE'
+        left_key.handle_right = left_key.co + Vector((delta.x * STRAIGHT_HANDLE_START,
+                                                      delta.y * STRAIGHT_HANDLE_START))
+        # 四点共线时三次贝塞尔退化成线段
+        right_key.handle_left_type = 'FREE'
+        right_key.handle_left = left_key.co + Vector((delta.x * STRAIGHT_HANDLE_END,
+                                                      delta.y * STRAIGHT_HANDLE_END))
 
     fc.update()
 
