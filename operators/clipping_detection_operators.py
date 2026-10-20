@@ -57,20 +57,30 @@ UPPER_ARM_TWIST_VGS = {
 }
 
 
-def get_hand_side_vg_names():
-    """把 HAND 部件的顶点组名按左右手拆开，供左右手临时网格和罩体使用"""
+# 左右两侧的标记
+SIDES = ("L", "R")
+
+# 这些部件会按左右拆成两块代理网格：
+# 罩体要以「对应那只手」作为 Shrinkwrap 目标，而「左手 vs 右手」「左小臂 vs 右小臂」
+# 也必须有两块分开的网格才能测，所以手部和小臂都在这里
+SIDE_SPLIT_CATEGORIES = ("HAND", "FOREARM")
+
+
+def get_side_vg_names(category):
+    """
+    把某个部件的顶点组名按左右拆开，供左右分开的临时网格使用
+
+    例：FOREARM -> {"L": {"ひじ.L", "手捩.L", ...}, "R": {"ひじ.R", ...}}
+    """
     return {
-        side: {name for name in PART_VGS["HAND"] if name.endswith("." + side)}
-        for side in ("L", "R")
+        side: {name for name in PART_VGS[category] if name.endswith("." + side)}
+        for side in SIDES
     }
 
 
-HAND_SIDES = ("L", "R")
-
-
-def split_hand_vertices(mesh_obj, hand_vertices, side_vg_names):
+def split_vertices_by_side(mesh_obj, vertices, side_vg_names):
     """
-    按顶点组权重把 HAND 的顶点分成左右手
+    按顶点组权重把某个部件的顶点分成左右两半
 
     side_vg_names 是 {侧: 顶点组名集合}。
     返回 {侧: 顶点索引列表}；每个顶点只归到权重更大的那一侧。
@@ -82,7 +92,7 @@ def split_hand_vertices(mesh_obj, hand_vertices, side_vg_names):
             name_to_side[name] = side
 
     result = {side: [] for side in side_vg_names}
-    for vertex_index in hand_vertices:
+    for vertex_index in vertices:
         vertex = mesh_obj.data.vertices[vertex_index]
         weights = {}
         for element in vertex.groups:
@@ -105,16 +115,45 @@ def get_part_objects_for_category(part_objs, category):
     """
     部件名 -> 实际参与检测的临时网格列表
 
-    HAND 已按左右手拆成 HAND.L / HAND.R，一个「手部-躯干」会生成两条检测对。
+    HAND / FOREARM 已按左右拆成 X.L / X.R，一个「手部-躯干」会生成两条检测对；
+    「手部-左右手」这类左右互检也靠这两块网格。
     """
-    if category == "HAND":
+    if category in SIDE_SPLIT_CATEGORIES:
         return [
-            obj for obj in (part_objs.get("HAND.L"), part_objs.get("HAND.R"))
+            obj for obj in (part_objs.get(f"{category}.{side}") for side in SIDES)
             if obj is not None
         ]
 
     obj = part_objs.get(category)
     return [obj] if obj is not None else []
+
+
+def build_detection_pairs(part_objs, detection_range):
+    """
+    检测范围 -> 实际参与碰撞的 [(网格A, 网格B), ...] 和 配对名
+
+    一个逻辑部件对可能展开成多条实际检测对（左右手各一条）；
+    反过来，「手部-左右手」这种同一部件的左右互检，左右两边会各遍历到一次，
+    统一成同一个键，既不会自己跟自己比，也不会重复测一遍。
+    """
+    pair_names = {}
+    for item in detection_range:
+        a, b = item.split("-")
+        same_part = a == b
+        for obj_a in get_part_objects_for_category(part_objs, a):
+            for obj_b in get_part_objects_for_category(part_objs, b):
+                # 同一块代理网格自己跟自己比没有意义
+                if obj_a is obj_b:
+                    continue
+                if same_part:
+                    # 按名字排序，让 (左, 右) 和 (右, 左) 落到同一个键上
+                    key = tuple(sorted((obj_a, obj_b), key=lambda obj: obj.name))
+                else:
+                    key = (obj_a, obj_b)
+                pair_names[key] = item
+
+    return list(pair_names.keys()), pair_names
+
 
 # 躯干骨骼链的两端：从「首」往上一直找到「上半身」
 SPINE_NECK_BONE_NAME = '首'
@@ -402,7 +441,7 @@ class ClippingDetectionOperator(bpy.types.Operator):
         if self.props.use_hand_sphere:
             hand_objs = {
                 side: self.part_objs.get(f"HAND.{side}")
-                for side in HAND_SIDES
+                for side in SIDES
             }
             self.hand_spheres = create_hand_spheres(
                 context, self.tmp_armature, hand_objs, tmp_col, TMP_OBJECT_TAG)
@@ -428,27 +467,24 @@ class ClippingDetectionOperator(bpy.types.Operator):
 
         part_vertices = classify_vertices(self.tmp_obj, part_vgs)
 
-        # 左右手拆成两个临时网格：罩体需要以「对应手」作为 Shrinkwrap 目标
-        hand_vertices = part_vertices.pop("HAND", [])
-        if hand_vertices:
-            side_vertices = split_hand_vertices(self.tmp_obj, hand_vertices, get_hand_side_vg_names())
-            for side in HAND_SIDES:
+        # 手部、小臂再按左右拆成两块：
+        # 罩体需要以「对应那只手」作为 Shrinkwrap 目标，
+        # 「左手 vs 右手」「左小臂 vs 右小臂」也得两块网格才测得了
+        for category in SIDE_SPLIT_CATEGORIES:
+            vertices = part_vertices.pop(category, [])
+            if not vertices:
+                continue
+            side_vertices = split_vertices_by_side(self.tmp_obj, vertices, get_side_vg_names(category))
+            for side in SIDES:
                 if side_vertices.get(side):
-                    part_vertices[f"HAND.{side}"] = side_vertices[side]
+                    part_vertices[f"{category}.{side}"] = side_vertices[side]
 
         return create_part_meshes(self.props, self.tmp_obj, part_vertices, self.tmp_col)
 
     def start_detection(self, context):
         """切到空白场景并建好逐帧生成器（不动原场景，避免依赖图整体重算）"""
         detection_range = get_ordered_detection_range(self.props)
-        pair_key_map = {}
-        for item in detection_range:
-            a, b = item.split("-")
-            # HAND 已经拆成左右手，一个逻辑部件对可能对应两条实际检测对
-            for obj_a in get_part_objects_for_category(self.part_objs, a):
-                for obj_b in get_part_objects_for_category(self.part_objs, b):
-                    pair_key_map[(obj_a, obj_b)] = item
-        pairs = list(pair_key_map.keys())
+        pairs, pair_key_map = build_detection_pairs(self.part_objs, detection_range)
 
         # 帧范围要在切换场景前读，换场景后读到的会是新场景的默认值
         frame_start = self.original_scene.frame_start

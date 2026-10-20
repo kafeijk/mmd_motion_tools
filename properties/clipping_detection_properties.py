@@ -97,12 +97,16 @@ class ClippingDetectionProperty(bpy.types.PropertyGroup):
             ("HAND-HEAD", "手部-头部", "手部-头部"),
             ("HAND-UPPER_ARM", "手部-大臂", "手部-大臂"),
             ("HAND-BREAST", "手部-胸部", "手部-胸部"),
+            # 同一部件的左右互检：左手 vs 右手
+            ("HAND-HAND", "手部-手部间", "左手与右手之间"),
             ("HAND-CUSTOM", "手部-自定义拓展", "手部-自定义拓展"),
 
             ("FOREARM-TORSO", "小臂-躯干", "小臂-躯干"),
             ("FOREARM-LOWER_LIMBS", "小臂-下肢", "小臂-下肢"),
             ("FOREARM-HEAD", "小臂-头部", "小臂-头部"),
             ("FOREARM-BREAST", "小臂-胸部", "小臂-胸部"),
+            # 同一部件的左右互检：左小臂 vs 右小臂
+            ("FOREARM-FOREARM", "小臂-小臂间", "左小臂与右小臂之间"),
             ("FOREARM-CUSTOM", "小臂-自定义拓展", "小臂-自定义拓展"),
 
             ("UPPER_ARM-TORSO", "大臂-躯干", "大臂-躯干"),
