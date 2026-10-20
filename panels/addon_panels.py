@@ -1,7 +1,7 @@
 from ..operators.bone_operators import SimplifyBoneOperator, FlipPoseOperator, SelectLinkedBoneOperator
 from ..operators.camera_motion_fixer_operators import FindCameraSegmentOperator, CameraMotionFixerOperator
 from ..operators.clipping_detection_operators import ClippingDetectionOperator, ClearClippingOperator, \
-    ResetDetectionRangeOperator, ShowClippingTypeOperator, get_detection_progress
+    ResetDetectionRangeOperator, ShowClippingTypeOperator, ToggleDetectionRangeOperator, get_detection_progress
 from ..operators.motion_fixer_operators import MotionFixerOperator, SyncRangeOperator, RemoveOuterKeyframesOperator, \
     RemoveInnerKeyframesOperator, DeselectKeyframesOperator
 from ..operators.utility_operators import ImportVmdPhysicsOperator, RemovePhysicalBoneAnimationOperator, \
@@ -70,6 +70,94 @@ class ToolsPanel(bpy.types.Panel):
                      text=UnmutePhysicalBoneAnimationOperator.bl_label, icon='HIDE_OFF')
 
 
+def get_detection_range_groups(props):
+    """
+    按「手部 / 小臂 / 大臂」把检测范围分组
+
+    默认范围排在前面，额外的范围（自定义拓展、大臂-躯干）排在后面；
+    这样常用的按钮先出现，和默认检测范围的顺序一致。
+    """
+    range_props = props.bl_rna.properties["detection_range"]
+    default_flags = set(range_props.default_flag)
+
+    groups = {}
+    for item in range_props.enum_items:
+        identifier = item.identifier
+        if "-" not in identifier:
+            continue
+
+        # 标识符形如 HAND-TORSO；显示名形如「手部-躯干」
+        part, target = identifier.split("-", 1)
+        name_parts = item.name.split("-", 1)
+        group_label = name_parts[0] if len(name_parts) == 2 else part
+        target_label = name_parts[1] if len(name_parts) == 2 else target
+        if target_label == "自定义拓展":
+            target_label = "自定义"
+
+        group = groups.setdefault(group_label, {"default": [], "extra": []})
+        bucket = "default" if identifier in default_flags else "extra"
+        group[bucket].append((identifier, target_label))
+
+    return [
+        (group_label, group["default"] + group["extra"])
+        for group_label, group in groups.items()
+    ]
+
+
+def draw_detection_range_grid(layout, props):
+    """
+    按属性面板的分栏方式画检测范围：左列右对齐部位名，右列放两个按钮
+
+    Blender 的 use_property_split 内部用的是 factor=0.4 的 split，
+    这里用同样的 0.4，并让左侧 label 右对齐，手部/小臂/大臂 的文本
+    就能和上面的「时间范围」「代理精度」等属性标签竖向对齐。
+    """
+    current = set(props.detection_range)
+
+    # 用一个 align=True 的 column 把各行紧凑地叠在一起，
+    # 否则 box 内每行之间会保留默认的纵向间距，看起来按钮上下很空。
+    grid_col = layout.column(align=True)
+
+    for group_label, items in get_detection_range_groups(props):
+        for start in range(0, len(items), 2):
+            row = grid_col.row(align=True)
+            split = row.split(factor=0.4, align=True)
+
+            # 方法名 40%：与属性标签同一条分栏线，右对齐
+            label_row = split.row()
+            label_row.alignment = 'RIGHT'
+            label_row.label(text=f"检测项-{group_label}" if start == 0 else "")
+
+            # 右侧 60%：两个按钮直接相邻排列，使用 Blender 默认的小间距。
+            # 只有 1 个按钮时，才按 50% 分格，把右半格留空，避免它撑满整行。
+            value_row = split.row(align=True)
+            pair = items[start:start + 2]
+
+            if len(pair) == 2:
+                for identifier, target_label in pair:
+                    op = value_row.operator(
+                        ToggleDetectionRangeOperator.bl_idname,
+                        text=target_label,
+                        depress=identifier in current,
+                    )
+                    op.value = identifier
+            else:
+                single_split = value_row.split(factor=0.5, align=True)
+
+                left_cell = single_split.row(align=True)
+                identifier, target_label = pair[0]
+                op = left_cell.operator(
+                    ToggleDetectionRangeOperator.bl_idname,
+                    text=target_label,
+                    depress=identifier in current,
+                )
+                op.value = identifier
+
+                # 占住右半格，单个按钮只占左半边
+                right_cell = single_split.row(align=True)
+                right_cell.label(text="")
+
+
 class ClippingDetection_PT_Panel(bpy.types.Panel):
     bl_label = "穿模检测"
     bl_idname = "MOTIONTOOLS_PT_detect_clipping"
@@ -95,18 +183,22 @@ class ClippingDetection_PT_Panel(bpy.types.Panel):
         col.prop(props, "proxy_accuracy")
         col.prop(props, "use_hand_sphere")
 
+        range_toggle_row = col.row(align=True)
+        range_toggle_row.prop(props, "show_detection_range")
         if props.show_detection_range:
-            custom_row = col.row(align=True)
+            range_toggle_row.operator(ResetDetectionRangeOperator.bl_idname, text="", icon="FILE_REFRESH")
+
+            # 自定义拓展和检测项放在一个 box 里，背景色与其它参数区分开
+            box = col.box()
+            box.use_property_split = True
+            box.use_property_decorate = False
+
+            custom_row = box.row(align=True)
             custom_row.prop(props, "custom_bones_str")
             custom_row.operator(GetSelectedBoneNameOperator.bl_idname, text="", icon="MOUSE_LMB")
             custom_row.operator(SelectLinkedBoneOperator.bl_idname, text="", icon="LINKED")
 
-            range_row = col.row(align=True)
-            range_col = range_row.column(align=True)
-            range_col.prop(props, "detection_range")
-            range_row.operator(ResetDetectionRangeOperator.bl_idname, text="", icon="FILE_REFRESH")
-
-        col.prop(props, "show_detection_range")
+            draw_detection_range_grid(box, props)
         col.prop(props, "remove_tmp")
         row = col.row(align=True)
         row.operator(ClippingDetectionOperator.bl_idname, text=ClippingDetectionOperator.bl_label)

@@ -631,6 +631,28 @@ class ClippingDetectionOperator(bpy.types.Operator):
             set_detection_progress(False)
 
 
+class ToggleDetectionRangeOperator(bpy.types.Operator):
+    bl_idname = "mmd_motion_tools.toggle_detection_range"
+    bl_label = "切换检测范围"
+    bl_description = "勾选或取消一个检测范围"
+    bl_options = {'UNDO'}
+
+    # 要切换的检测范围标识符，例如 "HAND-TORSO"
+    value: bpy.props.StringProperty()
+
+    def execute(self, context):
+        props = context.scene.mmd_motion_tools_detect_clipping
+        current = set(props.detection_range)
+        if self.value in current:
+            current.discard(self.value)
+        else:
+            current.add(self.value)
+
+        # 写回 ENUM_FLAG 属性，属性自带的 update 会处理「至少保留一项」的回滚
+        props.detection_range = current
+        return {'FINISHED'}
+
+
 class ResetDetectionRangeOperator(bpy.types.Operator):
     bl_idname = "mmd_motion_tools.reset_detection_range"
     bl_label = "重置检测范围"
