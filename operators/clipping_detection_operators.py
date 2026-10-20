@@ -240,9 +240,14 @@ class ClippingDetectionOperator(bpy.types.Operator):
             self.report({'ERROR'}, '未检测到骨架！')
             return None
 
-        objects = find_pmx_objects(armature)
+        pmx_objects = find_pmx_objects(armature)
+        # 只有在视图里真正显示出来的网格才参与检测，部分素体类模型可能含有默认服装，直接让用户删除的话不太合理。
+        objects = [pmx_object for pmx_object in pmx_objects if is_visible_in_viewport(pmx_object)]
         if not objects:
-            self.report({'ERROR'}, '未检测到网格！')
+            if pmx_objects:
+                self.report({'ERROR'}, '请确保网格在3D视图中可见！')
+            else:
+                self.report({'ERROR'}, '未检测到网格！')
             return None
 
         # 没有骨架修改器的网格不会跟随动作，检测结果没有意义

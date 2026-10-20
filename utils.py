@@ -536,6 +536,23 @@ def find_pmx_objects(pmx_armature):
     return list((child for child in pmx_armature.children if child.type == 'MESH' and child.mmd_type == 'NONE'))
 
 
+def is_visible_in_viewport(obj, view_layer=None):
+    """
+    物体是否真的显示在当前视图里
+
+    visible_get() 一次覆盖所有「看不见」的情况：
+    https://docs.blender.org/api/current/bpy.types.Object.html#bpy.types.Object.visible_get
+    - 物体自己被隐藏（眼睛图标，hide_set）
+    - 物体自己被禁用（监视器图标，hide_viewport）
+    - 所在集合被隐藏或被禁用（集合本身、或它在视图层里的隐藏状态）
+    - 所在集合在视图层里被排除（exclude）
+    - 根本没链进场景 / 不在当前视图层
+
+    物体同时挂在多个集合上时，只要还有一个集合可见，就算可见。
+    """
+    return obj.visible_get(view_layer=view_layer)
+
+
 def find_rigid_body_parent(root):
     """寻找刚体对象"""
     return next(filter(lambda o: o.type == 'EMPTY' and o.mmd_type == 'RIGID_GRP_OBJ', root.children), None)
