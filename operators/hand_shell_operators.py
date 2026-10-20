@@ -1,497 +1,446 @@
-import bmesh
-import math
+"""手部罩体：穿模检测时包裹手部的临时罩体
 
-import mathutils
+罩体由「正方体 + 3 级 Catmull-Clark 表面细分」应用得到（384 面），再依次添加：
+    - Armature：顶点组权重 手首.L / 手首.R，跟随临时骨架
+    - Shrinkwrap：目标是对应侧的 HAND 临时网格
+    - Smooth：5 次迭代、系数 1.0，把收缩后的表面抹平
+
+创建时按角色静置姿态的手部网格确定罩体中心与初始大小；检测时逐帧调整
+Shrinkwrap.offset（步长 0.001），让罩体正好包住手，并给 offset 打关键帧。
+罩体本身是临时对象（带 TMP_OBJECT_TAG），会按「删除临时对象」开关清理。
+"""
+
+import bmesh
+import bpy
+from mathutils import Vector
+from mathutils.bvhtree import BVHTree
 
 from ..utils import *
-from .clipping_detection_operators import PART_VGS
 
-# 左右手各做一个罩体，三个方向都取自对应侧的骨骼（.L / .R）
-SHELL_SIDES = ("L", "R")
+# 一侧罩体的目标细分级别：3 级 Catmull-Clark 后约 384 面
+HAND_SPHERE_SUBDIV_LEVELS = 3
 
-# 各辅助函数的默认侧，正文里都是显式传 side
-SHELL_SIDE = "L"
+# Smooth 修改器参数：5 次迭代、系数 1.0
+HAND_SPHERE_SMOOTH_ITERATIONS = 5
+HAND_SPHERE_SMOOTH_FACTOR = 1.0
 
-# 定方向必须用到的骨骼：左右手的 手首 与 中指１
-REQUIRED_SHELL_BONES = tuple(
-    f"{name}.{side}" for side in SHELL_SIDES for name in ("手首", "中指１")
-)
+# Shrinkwrap 偏移的单次调整幅度
+HAND_SPHERE_OFFSET_STEP = 0.001
 
-# 生成的罩体上打这个标记：它自己也挂在骨架下，下次收集手部顶点必须跳过它
-SHELL_TAG = "mmd_motion_tools_hand_shell"
+# 罩体对象上的标记，便于从临时集合里认出它
+HAND_SPHERE_TAG = "mmd_motion_tools_hand_sphere"
 
-# 和 classify_vertices 的默认阈值保持一致：同一部件内权重和超过它才算这个部件
-HAND_WEIGHT_THRESHOLD = 0.25
+HAND_SPHERE_SIDES = ("L", "R")
 
 
-class GenerateHandShellOperator(bpy.types.Operator):
-    bl_idname = "mmd_motion_tools.generate_hand_shell"
-    bl_label = "生成罩体"
-    bl_description = "根据手部网格生成椭圆罩体，并通过自动权重将其绑定到骨架。"
-    bl_options = {'REGISTER', 'UNDO'}
-
-    vertex_count: bpy.props.IntProperty(
-        name="顶点数",
-        description="单个罩体的顶点数量（取最接近该值的球面细分）",
-        default=5000,
-        min=12,
-        max=100000,
-    )
-
-    length_ratio: bpy.props.FloatProperty(
-        name="长",
-        description="长度的缩放比例",
-        default=1.0,
-        min=0.05,
-        max=10.0,
-    )
-
-    width_ratio: bpy.props.FloatProperty(
-        name="宽",
-        description="宽度的缩放比例",
-        default=1.0,
-        min=0.05,
-        max=10.0,
-    )
-
-    height_ratio: bpy.props.FloatProperty(
-        name="高",
-        description="高度的缩放比例",
-        default=1.0,
-        min=0.05,
-        max=10.0,
-    )
-
-    def check_props(self, context):
-        """执行前的校验，返回 (骨架, 网格列表)；不满足条件时返回 None"""
-        if not is_mmd_tools_enabled():
-            self.report({'ERROR'}, '未启用mmd_tools插件！')
-            return None
-
-        obj = context.active_object
-        if obj is None:
-            self.report({'ERROR'}, '请选择MMD模型！')
-            return None
-
-        root = find_pmx_root_with_child(obj)
-        if root is None:
-            self.report({'ERROR'}, '请选择MMD模型！')
-            return None
-
-        armature = find_pmx_armature(root)
-        if armature is None:
-            self.report({'ERROR'}, '未检测到骨架！')
-            return None
-
-        missing_bones = [name for name in REQUIRED_SHELL_BONES if armature.data.bones.get(name) is None]
-        if missing_bones:
-            self.report({'ERROR'}, '缺少手部骨骼：' + '、'.join(missing_bones))
-            return None
-
-        mesh_objects = find_pmx_objects(armature)
-        if not mesh_objects:
-            self.report({'ERROR'}, '未检测到网格！')
-            return None
-
-        vg_names = set()
-        for mesh_obj in mesh_objects:
-            if mesh_obj.get(SHELL_TAG):
-                continue
-            vg_names.update(vg.name for vg in mesh_obj.vertex_groups)
-        missing_groups = [name for name in REQUIRED_SHELL_BONES if name not in vg_names]
-        if missing_groups:
-            self.report({'ERROR'}, '网格缺少顶点组：' + '、'.join(missing_groups))
-            return None
-
-        return armature, mesh_objects
-
-    def execute(self, context):
-        result = self.check_props(context)
-        if result is None:
-            return {'CANCELLED'}
-        armature, mesh_objects = result
-
-        # 左右手逻辑完全对称
-        messages = []
-        for side in SHELL_SIDES:
-            message = self.build_side(context, armature, mesh_objects, side)
-            if message:
-                messages.append(message)
-
-        if not messages:
-            return {'CANCELLED'}
-
-        self.report({'INFO'}, '已生成 ' + '；'.join(messages))
-        return {'FINISHED'}
-
-    def build_side(self, context, armature, mesh_objects, side):
-        """生成一侧罩体，返回报告文案；某一侧做不了时返回 None"""
-        frame = build_ortho_frame(armature, side)
-        if frame is None:
-            self.report({'WARNING'}, f'{side} 侧手部骨骼缺失或方向异常（手首/中指１），已跳过')
-            return None
-        origin, axis_a, axis_b, axis_c = frame
-
-        points = collect_hand_points(armature, mesh_objects, side)
-        if not points:
-            self.report({'WARNING'}, f'{side} 侧没有找到手部顶点，已跳过')
-            return None
-
-        # 每个方向各取一次投影范围：差值就是长/宽/高，中点用来定位罩体中心
-        sizes = []
-        center = origin.copy()
-        for axis, ratio in zip((axis_a, axis_b, axis_c),
-                               (self.length_ratio, self.width_ratio, self.height_ratio)):
-            low, high = get_projection_range(points, axis, origin)
-            sizes.append(max(high - low, 1e-5) * ratio)
-            center += axis * ((low + high) * 0.5)
-
-        axes = (axis_a, axis_b, axis_c)
-        half_sizes = [size * 0.5 for size in sizes]
-        vertices, faces = build_ellipsoid_geometry(center, axes, half_sizes, self.vertex_count)
-
-        # 生成后、赋权重前：把罩体顺着半径推出去，直到完全包住手（相当于 Grab，但整体平滑）
-        vertices, inflation = enclose_hand_points(vertices, points, center, axes, half_sizes, faces)
-
-        # 上面算的都是骨架空间，这里统一转到世界空间：
-        # 物体矩阵保持单位阵，骨架修改器和自动权重都按世界坐标工作，最省事也最不容易错
-        world = armature.matrix_world
-        vertices = [world @ vertex for vertex in vertices]
-
-        shell = self.create_object(context, armature, f"手部罩体.{side}", vertices, faces)
-        self.bind_auto_weights(context, armature, shell)
-
-        return (f'{shell.name}：{len(vertices)} 顶点，'
-                f'长 {sizes[0]:.4f} / 宽 {sizes[1]:.4f} / 高 {sizes[2]:.4f}，'
-                f'外扩 {inflation:.2f}×')
-
-    def create_object(self, context, armature, name, vertices, faces):
-        mesh = bpy.data.meshes.new(name)
-        mesh.from_pydata([tuple(vertex) for vertex in vertices], [], faces)
-        mesh.update()
-
-        # 球面的绕序容易写反，交给 bmesh 统一重算法线，保证朝外
-        bm = bmesh.new()
-        bm.from_mesh(mesh)
-        bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
-        bm.to_mesh(mesh)
-        bm.free()
-
-        mesh.polygons.foreach_set("use_smooth", [True] * len(mesh.polygons))
-        mesh.update()
-
-        shell = bpy.data.objects.new(name, mesh)
-        # 打上标记：它挂在骨架下、又有手部顶点组，收集手部顶点时必须跳过
-        shell[SHELL_TAG] = True
-
-        # 挂在骨架所在的集合里，跟模型网格放一起
-        collection = armature.users_collection[0] if armature.users_collection else context.scene.collection
-        collection.objects.link(shell)
-        return shell
-
-    def bind_auto_weights(self, context, armature, shell):
-        """
-        先选罩体、再选骨架（骨架是活动物体），用自动权重设父级
-
-        parent_set 会保留世界变换，所以物体矩阵之后仍是单位阵，
-        罩体顶点本来就是世界坐标，位置不会跑。
-        """
-        ensure_object_mode(context)
-        for obj in context.view_layer.objects:
-            obj.select_set(False)
-        shell.select_set(True)
-        armature.select_set(True)
-        context.view_layer.objects.active = armature
-
-        try:
-            bpy.ops.object.parent_set(type='ARMATURE_AUTO')
-        except RuntimeError as error:
-            # 骨热蒙皮偶尔会失败（网格有重叠面等），至少保证骨架修改器还在
-            self.report({'WARNING'}, f'自动权重失败：{error}')
-
-        if not any(modifier.type == 'ARMATURE' and modifier.object == armature
-                   for modifier in shell.modifiers):
-            modifier = shell.modifiers.new(name="Armature", type='ARMATURE')
-            modifier.object = armature
-
-
-def get_side_hand_vgs(side=SHELL_SIDE):
-    """取 HAND 部件里属于某一侧的顶点组名"""
-    suffix = "." + side
-    return {name for name in PART_VGS["HAND"] if name.endswith(suffix)}
-
-
-def collect_hand_points(armature, mesh_objects, side=SHELL_SIDE):
+def get_hand_local_cos(hand_obj, depsgraph=None):
     """
-    收集手部顶点坐标（骨架空间）
+    取 HAND 临时网格当前帧的顶点坐标（物体局部空间）
 
-    之前生成的罩体身上也有手部顶点组（自动权重会给所有骨骼建组），
-    所以要按 SHELL_TAG 跳过，否则反复点会把手部范围越撑越大。
+    罩体对象和 HAND 网格用同一个 matrix_world，所以两者的局部坐标可以直接比较，
+    不需要再转到世界空间。
     """
-    hand_vgs = get_side_hand_vgs(side)
+    if depsgraph is None:
+        depsgraph = bpy.context.evaluated_depsgraph_get()
 
-    # 骨架空间的坐标：子网格自己的世界矩阵换算完，再退回骨架的局部空间
-    to_armature = armature.matrix_world.inverted()
-    points = []
-
-    for mesh_obj in mesh_objects:
-        if mesh_obj.get(SHELL_TAG):
-            continue
-
-        mesh = mesh_obj.data
-        matrix = to_armature @ mesh_obj.matrix_world
-
-        # 顶点上存的是顶点组索引，先把这一侧的手部组索引挑出来
-        hand_group = {vg.index for vg in mesh_obj.vertex_groups if vg.name in hand_vgs}
-        if not hand_group:
-            continue
-
-        for vertex in mesh.vertices:
-            weight = 0.0
-            for element in vertex.groups:
-                if element.group in hand_group:
-                    weight += element.weight
-            if weight > HAND_WEIGHT_THRESHOLD:
-                points.append(matrix @ vertex.co)
-
-    return points
+    eval_obj = hand_obj.evaluated_get(depsgraph)
+    return [vertex.co.copy() for vertex in eval_obj.data.vertices]
 
 
-def get_dummy_direction(armature, side=SHELL_SIDE):
+def measure_cos(cos):
+    """坐标集的包围盒中心、最大半径和三个方向的尺寸"""
+    low = Vector([min(co[i] for co in cos) for i in range(3)])
+    high = Vector([max(co[i] for co in cos) for i in range(3)])
+    center = (low + high) * 0.5
+    radius = max((co - center).length for co in cos)
+    # extents.xyz对应包围盒的xyz，即三个方向的尺寸
+    extents = high - low
+    return center, radius, extents
+
+
+def create_cube_object(name, side, collection, temp_tag):
+    """创建一个正方体网格对象，作为表面细分的输入（球形罩体实际为正方体+细分，编辑模式下视觉更好）"""
+    mesh = bpy.data.meshes.new(name)
+    bm = bmesh.new()
+    bmesh.ops.create_cube(bm, size=1.0)
+    bm.to_mesh(mesh)
+    bm.free()
+    mesh.update()
+
+    obj = bpy.data.objects.new(name, mesh)
+    # 临时对象标记 + 罩体自己的标记，清理和排查都要用
+    obj[temp_tag] = True
+    obj[HAND_SPHERE_TAG] = True
+    obj["mmd_hand_sphere_side"] = side
+    collection.objects.link(obj)
+    return obj
+
+
+def apply_subdivision(context, ball):
+    """给正方体添加 3 级 Catmull-Clark 表面细分并应用"""
+    modifier = ball.modifiers.new(name="Subdivision", type='SUBSURF')
+    modifier.subdivision_type = 'CATMULL_CLARK'
+    modifier.levels = HAND_SPHERE_SUBDIV_LEVELS
+    modifier.render_levels = HAND_SPHERE_SUBDIV_LEVELS
+
+    ensure_object_mode(context)
+    select_only_objects(context, [ball])
+    bpy.context.view_layer.objects.active = ball
+    bpy.ops.object.modifier_apply(modifier=modifier.name)
+
+
+def fit_ball_to_hand(mesh, hand_center, hand_radius):
     """
-    求「手掌朝向」：不用模型自带的 ダミー 骨骼，按创建 dummy 骨骼时的算法算出来
+    把细分后的罩体缩放、平移到手部周围，保证静置姿态下完全罩住手
 
-    取手首.head 和 中指１.head，把中指头压到手首所在的 XZ 平面上（Y 取手首的），
-    再在 XZ 平面内转 90°：左手 (z, 0, -x)，右手 (-z, 0, x)。
-    这与 mmd_kafei_tools 里 create_dummy_bone 的 callback1 / callback2 一致。
+    用罩体表面顶点到罩体中心的最小距离来算缩放，而不是最大距离，
+    这样罩体表面最「凹」的位置也不会落进手部最大半径以内。
     """
-    bones = armature.data.bones
-    wrist = bones.get(f"手首.{side}")
-    middle = bones.get(f"中指１.{side}")
-    if wrist is None or middle is None:
+    cos = [vertex.co.copy() for vertex in mesh.vertices]
+    if not cos:
+        return
+
+    low = Vector([min(co[i] for co in cos) for i in range(3)])
+    high = Vector([max(co[i] for co in cos) for i in range(3)])
+    ball_center = (low + high) * 0.5
+    ball_min_radius = min((co - ball_center).length for co in cos)
+    if ball_min_radius < 1e-9:
+        return
+
+    scale = hand_radius / ball_min_radius * 1.02
+    for vertex in mesh.vertices:
+        vertex.co = (vertex.co - ball_center) * scale + hand_center
+    mesh.update()
+
+
+def recalc_normals_and_smooth(mesh):
+    """统一法线朝外，并设置平滑着色"""
+    bm = bmesh.new()
+    bm.from_mesh(mesh)
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    bm.to_mesh(mesh)
+    bm.free()
+
+    mesh.polygons.foreach_set("use_smooth", [True] * len(mesh.polygons))
+    mesh.update()
+
+
+def create_side_sphere(context, armature, hand_obj, side, collection, temp_tag, hand_vertex_cos):
+    """创建一侧的罩体，返回 HandSphere；手部数据不足时返回 None"""
+    if len(hand_vertex_cos) < 3:
         return None
 
-    wrist_head = wrist.head_local
-    middle_head = middle.head_local
-    # 压到和手首同一个 Y 高度，方向就落在 XZ 平面里了
-    flattened = mathutils.Vector((middle_head.x, wrist_head.y, middle_head.z))
-    direction = flattened - wrist_head
-    if direction.length < 1e-6:
+    hand_center, hand_radius, hand_extents = measure_cos(hand_vertex_cos)
+    if hand_radius < 1e-6:
         return None
 
-    # 左手的 callback2 是 (z, 0, -x)，右手的 callback1 是 (-z, 0, x)
-    if side == "L":
-        rotated = mathutils.Vector((direction.z, 0.0, -direction.x))
+    name = f"手部罩体.{side}"
+    ball = create_cube_object(name, side, collection, temp_tag)
+    apply_subdivision(context, ball)
+
+    # 细分后的罩体先罩住静置姿态的手，再挂修改器
+    fit_ball_to_hand(ball.data, hand_center, hand_radius)
+    recalc_normals_and_smooth(ball.data)
+
+    # 罩体跟随手首骨骼：所有顶点都绑到 手首.L / 手首.R
+    vertex_group = ball.vertex_groups.new(name=f"手首.{side}")
+    vertex_group.add(list(range(len(ball.data.vertices))), 1.0, 'REPLACE')
+
+    # 和临时网格一样挂骨架修改器
+    armature_modifier = ball.modifiers.new(name="mmd_armature", type='ARMATURE')
+    armature_modifier.object = armature
+
+    # 收缩包裹到对应手：Nearest Surface Point + 可调的 offset
+    shrinkwrap = ball.modifiers.new(name="Shrinkwrap", type='SHRINKWRAP')
+    shrinkwrap.target = hand_obj
+    shrinkwrap.wrap_method = 'NEAREST_SURFACEPOINT'
+    shrinkwrap.wrap_mode = 'ON_SURFACE'
+    shrinkwrap.offset = 0.0
+
+    # 平滑掉收缩包裹产生的褶皱
+    smooth = ball.modifiers.new(name="Smooth", type='SMOOTH')
+    smooth.iterations = HAND_SPHERE_SMOOTH_ITERATIONS
+    smooth.factor = HAND_SPHERE_SMOOTH_FACTOR
+
+    # 和 HAND 临时网格使用同一个物体矩阵，局部坐标才能直接比较
+    ball.matrix_world = hand_obj.matrix_world.copy()
+
+    # 偏移上限：手部自身尺寸已经足够大，按局部单位给一个宽松上限
+    max_steps = max(50, int(max(hand_extents) / HAND_SPHERE_OFFSET_STEP))
+    return HandSphere(ball, hand_obj, side, shrinkwrap, max_steps)
+
+
+class HandSphere:
+    """
+    一只手对应的罩体
+
+    罩体通过 Armature 跟随手首，通过 Shrinkwrap 贴住对应手；每帧调整
+    Shrinkwrap.offset 让罩体表面把所有手部顶点包在里面，并给 offset 打关键帧。
+    """
+
+    def __init__(self, obj, hand_obj, side, shrinkwrap, max_steps):
+        self.obj = obj
+        self.hand_obj = hand_obj
+        self.side = side
+        self.shrinkwrap = shrinkwrap
+        self.max_steps = max_steps
+        self.offset_steps = 0
+
+    @staticmethod
+    def _covers_hand(tree, hand_tree):
+        """
+        罩体是否包住手：直接看罩体和手有没有面相交
+
+        和判断手部与其他部件穿模用的是同一套 BVH overlap。
+        罩体整体包住手时两者表面不应相交；一旦相交，说明手从罩体里穿出来了。
+        """
+        return not tree.overlap(hand_tree)
+
+
+def _apply_offsets(spheres_offsets):
+    """
+    同时设置多个罩体的 offset，只做一次依赖图更新，再为每个罩体建 BVH
+
+    spheres_offsets 是 {HandSphere: 步数}。返回 {对象名: BVH}。
+    """
+    for sphere, steps in spheres_offsets.items():
+        sphere.shrinkwrap.offset = steps * HAND_SPHERE_OFFSET_STEP
+
+    # 只有罩体的修改器参数变了，依赖图里被标记的也只有罩体；取当前依赖图即可拿到新结果
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+
+    return {
+        sphere.obj.name: BVHTree.FromObject(
+            sphere.obj.evaluated_get(depsgraph), depsgraph)
+        for sphere in spheres_offsets
+    }
+
+
+def update_hand_spheres(spheres, frame, depsgraph=None):
+    """
+    逐帧调整左右手罩体，找到「刚好包住手」的最小 Shrinkwrap.offset，并打关键帧。
+
+    判定标准
+    --------
+    罩体和手部网格做 BVH overlap（和判断手部与其他部件穿模完全一样）：
+        - 有面相交：手从罩体里穿出来了，offset 不够，需要放大；
+        - 没有面相交：罩体已经包住手，可以尝试把 offset 缩小一点。
+
+    offset 用「步数」表示
+    --------------------
+    不直接存浮点 offset，而是存整数步数：
+        offset = 步数 * HAND_SPHERE_OFFSET_STEP（0.001）
+    这样所有加减都是整数，避免反复 +/-0.001 产生浮点误差，也方便判断上限和 0。
+
+    为什么两只手要一起更新
+    ----------------------
+    每次修改 Shrinkwrap.offset 后，Blender 都要重新求值罩体的修改器栈：
+        Armature -> Shrinkwrap -> Smooth
+    这是整个检测里最贵的操作之一。左右手互不影响，所以每一轮把两只手
+    「下一步要试的 offset」一起写进去，只更新一次依赖图、一次性建两个 BVH：
+        依赖图更新次数 = max(左手调整次数, 右手调整次数)
+    而不是两只手各自更新之和。
+
+    states[sphere] 里每一项的含义
+    ----------------------------
+    current : 当前已经接受的步数（offset = current * 0.001）
+    covered : current 这一步是否已经包住手
+    tree    : current 这一步对应的罩体 BVH（最终碰撞检测直接用它）
+    done    : 这只手是否已经找到最终步数，后续轮次不再动它
+
+    搜索过程
+    --------
+    1. 用上一帧的步数作为起点（手部动作连续，通常离正确答案很近）。
+    2. 没包住 -> 步数 +1；包住 -> 步数 -1，看能不能再小一点。
+    3. 重复，直到：
+        - 放大到上限仍没包住 -> 停在上限；
+        - 已经缩到 0 -> 0 就是最小；
+        - 缩小一步后包不住 -> 退回上一步，结束。
+    最后写回 offset 并给当前帧打关键帧。
+    返回 {罩体对象名: 当帧 BVH}，供碰撞检测直接使用。
+    """
+    if not spheres:
+        return {}
+
+    if depsgraph is None:
+        depsgraph = bpy.context.evaluated_depsgraph_get()
+
+    # hand_data[sphere] = 当前帧手部网格的 BVH。
+    # 手部姿态在「调整 offset」的过程中不会变，所以每帧只需要建一次；
+    # 后面每个候选 offset 都拿它和罩体 BVH 做 overlap。
+    hand_data = {}
+
+    # 每只手的搜索状态，字段含义见函数开头说明。
+    states = {}
+    for sphere in spheres:
+        eval_hand = sphere.hand_obj.evaluated_get(depsgraph)
+        if not eval_hand.data.vertices:
+            continue
+
+        # 手部 BVH：和碰撞检测一样，只看罩体与手有没有面相交
+        hand_tree = BVHTree.FromObject(eval_hand, depsgraph)
+        hand_data[sphere] = hand_tree
+        states[sphere] = {
+            # 以上一帧的最终步数作为这一帧的起点
+            "current": sphere.offset_steps,
+            # 还没判断这一帧的当前 offset 是否包住手
+            "covered": False,
+            # 等第一轮评估后填入当前 offset 对应的 BVH
+            "tree": None,
+            # 是否已经找到最终步数
+            "done": False,
+        }
+
+    if not states:
+        return {}
+
+    # ------------------------------------------------------------------
+    # 第一轮：判断「上一帧的步数」在这一帧还能不能包住手
+    # ------------------------------------------------------------------
+    # 切帧时 Blender 已经按关键帧求值过一次，罩体的 Shrinkwrap.offset
+    # 通常正好等于上一帧的步数。如果确实相等，当前依赖图里的罩体就是
+    # 我们要的几何，直接建 BVH 即可，不用再改参数、再更新一次依赖图。
+    current_offsets = {sphere: state["current"] for sphere, state in states.items()}
+    already_applied = all(
+        abs(sphere.shrinkwrap.offset - steps * HAND_SPHERE_OFFSET_STEP) < 1e-6
+        for sphere, steps in current_offsets.items()
+    )
+
+    if already_applied:
+        # 复用切帧后的求值结果：只建 BVH，不触发新的依赖图更新
+        trees = {
+            sphere.obj.name: BVHTree.FromObject(
+                sphere.obj.evaluated_get(depsgraph), depsgraph)
+            for sphere in states
+        }
     else:
-        rotated = mathutils.Vector((-direction.z, 0.0, direction.x))
-    if rotated.length < 1e-6:
-        return None
-    return rotated.normalized()
+        # 关键帧求值结果和上一帧步数不一致（例如插值/外插），
+        # 需要显式把两只手都设回起点，再统一更新一次。
+        trees = _apply_offsets(current_offsets)
+
+    for sphere, state in states.items():
+        hand_tree = hand_data[sphere]
+        # 用「罩体 BVH 和手部 BVH 有没有面相交」判断是否包住
+        state["covered"] = sphere._covers_hand(trees[sphere.obj.name], hand_tree)
+        # 保存这一步的 BVH；如果后面不再调整，它就是最终碰撞用的 BVH
+        state["tree"] = trees[sphere.obj.name]
+        # 起点已经在上限、仍没包住：只能停在上限，结束这只手的搜索
+        if not state["covered"] and state["current"] >= sphere.max_steps:
+            state["done"] = True
+
+    # ------------------------------------------------------------------
+    # 后续轮次：没包住的 +1，已包住的 -1 试探；两只手共用一次更新
+    # ------------------------------------------------------------------
+    while True:
+        # 这一轮要一起试探的新步数。只收集还没结束的手，
+        # 已经 done 的手不会出现在这里，也不会被改动。
+        next_offsets = {}
+        for sphere, state in states.items():
+            if state["done"]:
+                continue
+
+            if not state["covered"]:
+                # 放大阶段：当前 offset 包不住，需要 +1 步
+                if state["current"] >= sphere.max_steps:
+                    # 已经到上限，无法再放大，停在上限
+                    state["done"] = True
+                    continue
+                next_offsets[sphere] = state["current"] + 1
+            else:
+                # 缩小阶段：当前 offset 能包住，尝试 -1 步，看能不能更贴合
+                if state["current"] <= 0:
+                    # 已经是 0，最小就是 0，不需要再试
+                    state["done"] = True
+                    continue
+                next_offsets[sphere] = state["current"] - 1
+
+        if not next_offsets:
+            # 所有手都 done，搜索结束
+            break
+
+        # 把这一轮所有候选步数一起写进修改器，只更新一次依赖图，
+        # 然后为每个候选 offset 建 BVH。注意：只更新 next_offsets 里的手，
+        # 已 done 的手不会出现在这里，也不会再被改动（它的 tree 已经保存好了）。
+        trees = _apply_offsets(next_offsets)
+
+        for sphere, steps in next_offsets.items():
+            state = states[sphere]
+            hand_tree = hand_data[sphere]
+            covered = sphere._covers_hand(trees[sphere.obj.name], hand_tree)
+
+            if not state["covered"]:
+                # ---------------- 放大阶段 ----------------
+                # 当前没包住，这一步无论包没包住都要接受：
+                # - 这一步包住了：下一轮会进入缩小阶段，尝试 -1；
+                # - 这一步还没包住：下一轮继续 +1。
+                state["current"] = steps
+                state["covered"] = covered
+                state["tree"] = trees[sphere.obj.name]
+
+                if not covered and steps >= sphere.max_steps:
+                    # 放大到上限仍没包住，只能停在这里
+                    state["done"] = True
+
+            elif covered:
+                # ---------------- 缩小试探成功 ----------------
+                # 更小的 offset 仍然包住手，接受它，下一轮继续尝试更小
+                state["current"] = steps
+                state["tree"] = trees[sphere.obj.name]
+
+            else:
+                # ---------------- 缩小试探失败 ----------------
+                # 再小一步就包不住手了，说明上一步的 current 就是最小可包住值。
+                # 保留原来的 current 和 tree，不再调整。
+                #
+                # 注意：这时修改器里的 offset 还停在刚试过的较小值上，
+                # 但下面不会再使用它的求值结果；最终写回阶段会把 offset
+                # 设回 current 并打关键帧。
+                state["done"] = True
+
+    # ------------------------------------------------------------------
+    # 写回最终步数并打关键帧
+    # ------------------------------------------------------------------
+    result = {}
+    for sphere, state in states.items():
+        # 把「刚好包住」的步数换算回 offset，写回修改器
+        sphere.offset_steps = state["current"]
+        sphere.shrinkwrap.offset = state["current"] * HAND_SPHERE_OFFSET_STEP
+
+        # 每一帧都打关键帧，之后用户拖动时间轴就能看到 offset 的变化
+        sphere.shrinkwrap.keyframe_insert(data_path="offset", frame=frame)
+
+        # 返回当前帧最终使用的 BVH（对应 current 那一步），供碰撞检测使用
+        result[sphere.obj.name] = state["tree"]
+
+    return result
 
 
-def build_ortho_frame(armature, side=SHELL_SIDE):
+def create_hand_spheres(context, armature, hand_objs, collection, temp_tag):
     """
-    按骨骼方向建正交坐标系，返回 (origin, 方向A, 方向B, 方向C)
+    按角色静置姿态创建左右手罩体，返回 HandSphere 列表
 
-    长 A：手首.head → 中指１.tail
-    高 C：由手首.head 和 中指１.head 算出来的手掌朝向（见 get_dummy_direction）
-    宽 B：与 A、C 都垂直，直接取 A × C
-
-    A 和 C 本身不一定严格垂直，所以再用 A × B 反推一次 C（等于把 C 里平行于 A 的
-    分量去掉），保证三个轴两两垂直、长度测量和椭球拉伸用的是同一套轴。
-    骨骼缺失或方向退化（长度≈0、A 与 C 平行）时返回 None。
+    hand_objs 为 {侧: HAND 临时网格}
     """
-    bones = armature.data.bones
-    wrist = bones.get(f"手首.{side}")
-    middle = bones.get(f"中指１.{side}")
-    if wrist is None or middle is None:
-        return None
+    # https://docs.blender.org/api/5.2/bpy.types.Armature.html#bpy.types.Armature.pose_position
+    pose_position = armature.data.pose_position
+    armature.data.pose_position = 'REST'
+    try:
+        bpy.context.view_layer.update()
+        depsgraph = bpy.context.evaluated_depsgraph_get()
 
-    dummy_direction = get_dummy_direction(armature, side)
-    if dummy_direction is None:
-        return None
+        spheres = []
+        for side in HAND_SPHERE_SIDES:
+            hand_obj = hand_objs.get(side)
+            if hand_obj is None:
+                continue
 
-    origin = wrist.head_local.copy()
-    length_axis = middle.tail_local - wrist.head_local
-    if length_axis.length < 1e-6:
-        return None
-    length_axis.normalize()
+            hand_vertex_cos = get_hand_local_cos(hand_obj, depsgraph)
+            sphere = create_side_sphere(
+                context, armature, hand_obj, side, collection, temp_tag, hand_vertex_cos)
+            if sphere is not None:
+                spheres.append(sphere)
 
-    # 宽度方向：和长、高都垂直。A 与 C 平行时叉积为零，方向不确定
-    width_axis = length_axis.cross(dummy_direction)
-    if width_axis.length < 1e-6:
-        return None
-    width_axis.normalize()
-
-    # 反推与 A、B 都垂直的 C（= 去掉 C 里平行于 A 的分量），再对齐手掌朝向
-    height_axis = length_axis.cross(width_axis)
-    if height_axis.dot(dummy_direction) < 0.0:
-        height_axis = -height_axis
-
-    return origin, length_axis, width_axis, height_axis
-
-
-def get_projection_range(points, axis, origin):
-    """点集在 axis 方向上的投影范围 (最小值, 最大值)"""
-    values = [(point - origin).dot(axis) for point in points]
-    return min(values), max(values)
-
-
-def fit_sphere_subdivision(target_count):
-    """
-    挑一组最接近目标顶点数的球面细分，返回 (经线段数, 纬线数)
-
-    球面顶点数 = 经线段数 × (纬线数 - 1) + 2（两极各一个顶点），任意数不一定凑得出来。
-    光看误差会选出「3 条经线 × 334 条纬线」这种极端形状，所以经线段数限制在
-    2 倍纬线数附近（Blender 自带 UV 球也是这个比例），先比误差、再比偏离程度。
-    """
-    target = max(14, int(target_count))
-    best = None
-    for rings in range(3, 257):
-        for segments in range(max(3, rings * 2 - 2), rings * 2 + 3):
-            count = segments * (rings - 1) + 2
-            score = (abs(count - target), abs(segments - rings * 2))
-            if best is None or score < best[0]:
-                best = (score, segments, rings)
-    return best[1], best[2]
-
-
-def build_ellipsoid_geometry(center, axes, half_sizes, target_count):
-    """
-    生成椭球网格数据，返回 (顶点列表, 面列表)
-
-    先造单位球再按三个半径拉伸：坐标 = 中心 + A*u*半长 + B*v*半宽 + C*w*半高
-    """
-    segments, rings = fit_sphere_subdivision(target_count)
-    axis_a, axis_b, axis_c = axes
-    half_a, half_b, half_c = half_sizes
-
-    # 北极单独一个顶点
-    vertices = [center + axis_c * half_c]
-    for ring in range(1, rings):
-        theta = math.pi * ring / rings
-        sin_theta = math.sin(theta)
-        cos_theta = math.cos(theta)
-        for segment in range(segments):
-            phi = 2.0 * math.pi * segment / segments
-            vertices.append(center
-                            + axis_a * (sin_theta * math.cos(phi) * half_a)
-                            + axis_b * (sin_theta * math.sin(phi) * half_b)
-                            + axis_c * (cos_theta * half_c))
-    # 南极
-    vertices.append(center - axis_c * half_c)
-    south = len(vertices) - 1
-
-    def index(ring, segment):
-        return 1 + (ring - 1) * segments + segment % segments
-
-    faces = []
-    # 顶盖三角面
-    for segment in range(segments):
-        faces.append((0, index(1, segment), index(1, segment + 1)))
-    # 中间的四边面
-    for ring in range(1, rings - 1):
-        for segment in range(segments):
-            faces.append((
-                index(ring, segment),
-                index(ring, segment + 1),
-                index(ring + 1, segment + 1),
-                index(ring + 1, segment),
-            ))
-    # 底盖三角面
-    for segment in range(segments):
-        faces.append((south, index(rings - 1, segment + 1), index(rings - 1, segment)))
-
-    return vertices, faces
-
-
-def build_vertex_neighbors(vertex_count, faces):
-    """从面表建顶点邻接表（拉普拉斯平滑用）"""
-    neighbors = [set() for _ in range(vertex_count)]
-    for face in faces:
-        for index, vertex_index in enumerate(face):
-            neighbors[vertex_index].add(face[index - 1])
-            neighbors[vertex_index].add(face[(index + 1) % len(face)])
-    return [sorted(near) for near in neighbors]
-
-
-def to_unit_space(coords, center, axes, half_sizes):
-    """
-    把坐标换算到「单位球空间」：减中心 → 投影到三个轴上 → 除以半轴
-
-    在这个空间里，初始椭球表面到中心的距离正好是 1，
-    于是「半径」就等于「相对椭球放大了多少倍」，径向缩放直接乘这个系数即可。
-    """
-    # 延迟导入，避免拖慢插件加载速度
-    import numpy as np
-
-    axis_a, axis_b, axis_c = (np.array(axis[:]) for axis in axes)
-    relative = np.asarray([tuple(co) for co in coords]) - np.array(center[:])
-    projected = np.stack([relative @ axis_a, relative @ axis_b, relative @ axis_c], axis=1)
-    return projected / np.array([half_sizes[0], half_sizes[1], half_sizes[2]])
-
-
-def scale_radially(vertices, center, factors):
-    """按方向把顶点沿半径缩放：新位置 = 中心 + (原位置 - 中心) × 系数"""
-    import numpy as np
-
-    origin = np.array(center[:])
-    moved = origin + (np.array([tuple(vertex) for vertex in vertices]) - origin) * np.asarray(factors)[:, None]
-    return [mathutils.Vector(tuple(row)) for row in moved]
-
-
-def smooth_scale_field(scale, faces, iterations):
-    """在网格上做几轮拉普拉斯平滑，让半径场过渡圆润"""
-    import numpy as np
-
-    neighbors = build_vertex_neighbors(len(scale), faces)
-    for _ in range(iterations):
-        averaged = scale.copy()
-        for index, near in enumerate(neighbors):
-            if near:
-                averaged[index] = 0.5 * scale[index] + 0.5 * scale[near].mean()
-        scale = averaged
-    return scale
-
-
-def enclose_hand_points(vertices, points, center, axes, half_sizes, faces,
-                        margin=1.06, sigma=0.7, smooth_iterations=5):
-    """
-    把罩体沿半径方向推出去，直到手部顶点全部落在里面（类似雕刻的 Grab，但整体是平滑的）
-
-    做法分三步：
-    1. 把罩体和手部点都换算到「单位球空间」：罩体顶点半径为 1，手部点到原点的距离 r
-       就是它需要的半径
-    2. r > 1 的点构成一个「这里需要鼓起多少」的场，按角度做高斯衰减后取最大值，
-       得到每个罩体顶点方向的缩放系数（高斯很宽，相邻顶点几乎一起鼓，所以不会扎尖）
-    3. 在网格上做几轮拉普拉斯平滑，最后夹一层下限，保证平滑没把该鼓的地方压回去
-
-    返回 (新顶点列表, 最大缩放系数)
-    """
-    import numpy as np
-
-    unit_vertices = to_unit_space(vertices, center, axes, half_sizes)
-    unit_points = to_unit_space(points, center, axes, half_sizes)
-
-    radii = np.linalg.norm(unit_points, axis=1)
-    outside = radii > 1.0
-    if not outside.any():
-        return vertices, 1.0
-
-    directions_v = unit_vertices / np.linalg.norm(unit_vertices, axis=1, keepdims=True)
-    directions_p = unit_points[outside] / radii[outside, None]
-    excess = radii[outside] - 1.0
-
-    # 1 - cos(角度) ≈ 角度²/2，所以 exp(-(1-dot)/sigma²) 就是一个角度方向的宽高斯
-    needed = np.zeros(len(directions_v))
-    for start in range(0, len(directions_v), 256):
-        block = directions_v[start:start + 256] @ directions_p.T
-        kernel = np.exp(-(1.0 - block) / (sigma * sigma))
-        needed[start:start + 256] = (kernel * excess[None, :]).max(axis=1) * margin
-
-    scale = 1.0 + needed
-    if smooth_iterations > 0:
-        # 平滑会把波峰压矮，所以平滑后再夹一层下限，保证每个方向都不小于需求
-        scale = np.maximum(smooth_scale_field(scale, faces, smooth_iterations), 1.0 + needed)
-
-    return scale_radially(vertices, center, scale), float(scale.max())
+        return spheres
+    finally:
+        armature.data.pose_position = pose_position
+        bpy.context.view_layer.update()

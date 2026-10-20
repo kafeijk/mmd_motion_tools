@@ -7,6 +7,7 @@ import mathutils
 from ..properties.clipping_detection_properties import get_ordered_detection_range, set_frame_hits, \
     clear_clipping_results, get_clipping_type_labels
 from ..utils import *
+from .hand_shell_operators import create_hand_spheres, update_hand_spheres
 
 VG_NAMES = [""]
 VG_PAIRS = [""]
@@ -54,6 +55,66 @@ UPPER_ARM_TWIST_VGS = {
     '腕.L': ('腕捩.L', '腕捩1.L', '腕捩2.L', '腕捩3.L'),
     '腕.R': ('腕捩.R', '腕捩1.R', '腕捩2.R', '腕捩3.R'),
 }
+
+
+def get_hand_side_vg_names():
+    """把 HAND 部件的顶点组名按左右手拆开，供左右手临时网格和罩体使用"""
+    return {
+        side: {name for name in PART_VGS["HAND"] if name.endswith("." + side)}
+        for side in ("L", "R")
+    }
+
+
+HAND_SIDES = ("L", "R")
+
+
+def split_hand_vertices(mesh_obj, hand_vertices, side_vg_names):
+    """
+    按顶点组权重把 HAND 的顶点分成左右手
+
+    side_vg_names 是 {侧: 顶点组名集合}。
+    返回 {侧: 顶点索引列表}；每个顶点只归到权重更大的那一侧。
+    """
+    index_to_name = {vertex_group.index: vertex_group.name for vertex_group in mesh_obj.vertex_groups}
+    name_to_side = {}
+    for side, names in side_vg_names.items():
+        for name in names:
+            name_to_side[name] = side
+
+    result = {side: [] for side in side_vg_names}
+    for vertex_index in hand_vertices:
+        vertex = mesh_obj.data.vertices[vertex_index]
+        weights = {}
+        for element in vertex.groups:
+            side = name_to_side.get(index_to_name.get(element.group))
+            if side is None:
+                continue
+            weights[side] = weights.get(side, 0.0) + element.weight
+
+        if not weights:
+            continue
+
+        side = max(weights, key=weights.get)
+        if weights[side] > 0.0:
+            result[side].append(vertex_index)
+
+    return result
+
+
+def get_part_objects_for_category(part_objs, category):
+    """
+    部件名 -> 实际参与检测的临时网格列表
+
+    HAND 已按左右手拆成 HAND.L / HAND.R，一个「手部-躯干」会生成两条检测对。
+    """
+    if category == "HAND":
+        return [
+            obj for obj in (part_objs.get("HAND.L"), part_objs.get("HAND.R"))
+            if obj is not None
+        ]
+
+    obj = part_objs.get(category)
+    return [obj] if obj is not None else []
 
 # 躯干骨骼链的两端：从「首」往上一直找到「上半身」
 SPINE_NECK_BONE_NAME = '首'
@@ -224,6 +285,7 @@ class ClippingDetectionOperator(bpy.types.Operator):
         self.tmp_armature = None
         self.part_objs = {}
         self.part_vgs = {}
+        self.hand_spheres = []
         # 执行前已存在的网格/形态键数据块，清理时只动这次新建的
         self.mesh_pointers_before = None
         self.key_pointers_before = None
@@ -331,6 +393,18 @@ class ClippingDetectionOperator(bpy.types.Operator):
             context, self.armature, tmp_col, part_objs, self.part_vgs)
         repoint_armature_modifiers(part_objs, self.tmp_armature)
 
+        # 手部罩体：按静置姿态手部网格分别创建左右罩体，挂到临时集合里一起清理
+        if self.props.use_hand_sphere:
+            hand_objs = {
+                side: self.part_objs.get(f"HAND.{side}")
+                for side in HAND_SIDES
+            }
+            self.hand_spheres = create_hand_spheres(
+                context, self.tmp_armature, hand_objs, tmp_col, TMP_OBJECT_TAG)
+            if not self.hand_spheres:
+                # 依然放行
+                self.report({'WARNING'}, '未生成手部罩体：没有找到手部顶点或手部骨骼')
+
     def create_part_objects(self):
         """按顶点组划分身体部件，生成各部件代理网格，返回 {部件: 代理网格}"""
         part_vgs = copy.deepcopy(PART_VGS)
@@ -348,6 +422,15 @@ class ClippingDetectionOperator(bpy.types.Operator):
         self.part_vgs = part_vgs
 
         part_vertices = classify_vertices(self.tmp_obj, part_vgs)
+
+        # 左右手拆成两个临时网格：罩体需要以「对应手」作为 Shrinkwrap 目标
+        hand_vertices = part_vertices.pop("HAND", [])
+        if hand_vertices:
+            side_vertices = split_hand_vertices(self.tmp_obj, hand_vertices, get_hand_side_vg_names())
+            for side in HAND_SIDES:
+                if side_vertices.get(side):
+                    part_vertices[f"HAND.{side}"] = side_vertices[side]
+
         return create_part_meshes(self.props, self.tmp_obj, part_vertices, self.tmp_col)
 
     def start_detection(self, context):
@@ -356,7 +439,10 @@ class ClippingDetectionOperator(bpy.types.Operator):
         pair_key_map = {}
         for item in detection_range:
             a, b = item.split("-")
-            pair_key_map[(self.part_objs.get(a), self.part_objs.get(b))] = item
+            # HAND 已经拆成左右手，一个逻辑部件对可能对应两条实际检测对
+            for obj_a in get_part_objects_for_category(self.part_objs, a):
+                for obj_b in get_part_objects_for_category(self.part_objs, b):
+                    pair_key_map[(obj_a, obj_b)] = item
         pairs = list(pair_key_map.keys())
 
         # 帧范围要在切换场景前读，换场景后读到的会是新场景的默认值
@@ -377,7 +463,9 @@ class ClippingDetectionOperator(bpy.types.Operator):
         # hide_set 是按视图层生效的，新场景的视图层里再藏一次
         self.tmp_armature.hide_set(True)
 
-        self.generator = iter_detect_collisions(pairs, frame_start, frame_end, pair_names=pair_key_map)
+        self.generator = iter_detect_collisions(
+            pairs, frame_start, frame_end, pair_names=pair_key_map,
+            hand_spheres=self.hand_spheres)
 
         # 先亮一个 0%，让用户看到「已经开始了」，而不是停在初始化那一条上
         self.percent = 0
@@ -396,6 +484,7 @@ class ClippingDetectionOperator(bpy.types.Operator):
         target_props.proxy_accuracy = source_props.proxy_accuracy
         target_props.show_detection_range = source_props.show_detection_range
         target_props.remove_tmp = source_props.remove_tmp
+        target_props.use_hand_sphere = source_props.use_hand_sphere
 
         # custom_bones_str 的 update 会自动勾上「自定义拓展」那几项，所以它先写；
         target_props.custom_bones_str = source_props.custom_bones_str
@@ -1172,6 +1261,19 @@ def remove_part_meshes(tmp_col, tmp_objs=None, remove_empty_collection=False):
             for obj in targets
         ]
 
+        # 罩体的 Shrinkwrap.offset 关键帧有一个 Action，对象删掉后 Action 不会跟着消失，
+        # 这里一起记下来，数据块删干净后再清掉已经没人用的 Action
+        doomed_actions = set()
+        for obj, data in doomed:
+            animation_data = getattr(obj, "animation_data", None)
+            if animation_data is not None and animation_data.action is not None:
+                doomed_actions.add(animation_data.action)
+            shape_keys = getattr(data, "shape_keys", None) if data is not None else None
+            if shape_keys is not None:
+                key_animation = getattr(shape_keys, "animation_data", None)
+                if key_animation is not None and key_animation.action is not None:
+                    doomed_actions.add(key_animation.action)
+
         for obj, _data in doomed:
             bpy.data.objects.remove(obj, do_unlink=True)
 
@@ -1182,6 +1284,13 @@ def remove_part_meshes(tmp_col, tmp_objs=None, remove_empty_collection=False):
                 bpy.data.meshes.remove(data)
             elif data.id_type == 'ARMATURE':
                 bpy.data.armatures.remove(data)
+
+        for action in doomed_actions:
+            try:
+                if action.users == 0:
+                    bpy.data.actions.remove(action)
+            except (ReferenceError, RuntimeError):
+                continue
 
     if not remove_empty_collection:
         return
@@ -1235,13 +1344,17 @@ def get_bvh_for(obj, depsgraph):
     return mathutils.bvhtree.BVHTree.FromObject(obj_eval, depsgraph)
 
 
-def iter_detect_collisions(pairs, start, end, merge_on_type_change=True, pair_names=None):
+def iter_detect_collisions(pairs, start, end, merge_on_type_change=True, pair_names=None,
+                           hand_spheres=None):
     """
     逐帧检测各部件代理网格之间是否相交（生成器版本）
 
     每处理完一帧就 yield 一次 (已处理帧数, 总帧数)，让调用方有机会把控制权还给
     Blender 刷新界面；检测结束时的返回值是 (merged, frame_hits)，
     从 StopIteration.value 里取。同步版本见 detect_collisions_between_objects。
+
+    hand_spheres 不为空时，每帧先调整罩体的 Shrinkwrap.offset（步长 0.001）并打关键帧，
+    有罩体的一侧直接用罩体作为手部参与碰撞；没有罩体时才退回手部代理网格。
 
     实测（250 帧，250 个无关网格全程保留）：
         scene.frame_set(f)                          1.010 s
@@ -1254,31 +1367,79 @@ def iter_detect_collisions(pairs, start, end, merge_on_type_change=True, pair_na
     frame_hits = {}
     total = end - start + 1
 
+    hand_spheres = list(hand_spheres or ())
+    # 手部罩体按「它所属的手部代理网格」归类：检测对里出现这个网格时，就把它这一侧的罩体也测一遍
+    hand_sphere_map = {}
+    for sphere in hand_spheres:
+        hand_sphere_map.setdefault(sphere.hand_obj.name, []).append(sphere)
+
     for index, frame in enumerate(range(start, end + 1), start=1):
         # 直接修改scene.frame_current确实不会触发完整的数据更新，但frame_set()的开销太大，而在当前场景下，两者获取的数据一致。
         scene.frame_current = frame
         deps = bpy.context.evaluated_depsgraph_get()
 
+        # 先更新罩体：两只手共用依赖图更新，每帧调整 Shrinkwrap.offset 并打关键帧
+        sphere_trees = {}
+        if hand_spheres:
+            sphere_trees = update_hand_spheres(hand_spheres, frame, deps)
+            # 部件几何在当前帧没有变，继续用切帧后的依赖图即可，不必再整体求值一次
+
+        # 罩体已经包住手，碰撞时直接把罩体当成手；只保留更新成功的罩体
+        active_hand_spheres = {}
+        for hand_name, spheres in hand_sphere_map.items():
+            active = [sphere for sphere in spheres if sphere.obj.name in sphere_trees]
+            if active:
+                active_hand_spheres[hand_name] = active
+
         # 按对象名缓存
         bvh_cache = {}
+
+        def get_tree(obj):
+            tree = bvh_cache.get(obj.name)
+            if tree is None:
+                tree = get_bvh_for(obj, deps)
+                bvh_cache[obj.name] = tree
+            return tree
 
         for obj_a, obj_b in pairs:
             if obj_a is None or obj_b is None:
                 continue
 
-            tree_a = bvh_cache.get(obj_a.name)
-            if tree_a is None:
-                tree_a = get_bvh_for(obj_a, deps)
-                bvh_cache[obj_a.name] = tree_a
+            spheres_a = active_hand_spheres.get(obj_a.name)
+            spheres_b = active_hand_spheres.get(obj_b.name)
 
-            tree_b = bvh_cache.get(obj_b.name)
-            if tree_b is None:
-                tree_b = get_bvh_for(obj_b, deps)
-                bvh_cache[obj_b.name] = tree_b
+            if spheres_a or spheres_b:
+                # 罩体已经完整包住手，罩体就是真正的手部；不再建手部代理网格的 BVH
+                if spheres_a and spheres_b:
+                    hit = any(
+                        sphere_trees[sphere_a.obj.name].overlap(sphere_trees[sphere_b.obj.name])
+                        for sphere_a in spheres_a
+                        for sphere_b in spheres_b
+                    )
+                elif spheres_a:
+                    other_tree = get_tree(obj_b)
+                    hit = any(
+                        sphere_trees[sphere.obj.name].overlap(other_tree)
+                        for sphere in spheres_a
+                    )
+                else:
+                    other_tree = get_tree(obj_a)
+                    hit = any(
+                        sphere_trees[sphere.obj.name].overlap(other_tree)
+                        for sphere in spheres_b
+                    )
+            else:
+                # 没有罩体（未勾选或创建失败）时退回原来的手部代理网格检测
+                tree_a = get_tree(obj_a)
+                tree_b = get_tree(obj_b)
+                hit = bool(tree_a.overlap(tree_b))
 
-            if tree_a.overlap(tree_b):
+            if hit:
                 name = pair_names.get((obj_a, obj_b)) if pair_names else None
-                frame_hits.setdefault(frame, []).append(name)
+                names = frame_hits.setdefault(frame, [])
+                # 左右手可能在同一帧同时命中同一个逻辑部件对，只记一次
+                if name not in names:
+                    names.append(name)
 
         yield index, total
 
@@ -1321,9 +1482,11 @@ def merge_frame_hits(frame_hits, merge_on_type_change=True):
 
 
 @timeit
-def detect_collisions_between_objects(pairs, start, end, merge_on_type_change=True, pair_names=None):
+def detect_collisions_between_objects(pairs, start, end, merge_on_type_change=True, pair_names=None,
+                                      hand_spheres=None):
     """同步跑完整个检测，返回 (merged, frame_hits)；分片执行请用 iter_detect_collisions"""
-    generator = iter_detect_collisions(pairs, start, end, merge_on_type_change, pair_names)
+    generator = iter_detect_collisions(
+        pairs, start, end, merge_on_type_change, pair_names, hand_spheres)
     while True:
         try:
             next(generator)

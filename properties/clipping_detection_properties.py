@@ -159,6 +159,13 @@ class ClippingDetectionProperty(bpy.types.PropertyGroup):
         default=True
     )
 
+    # 是否生成手部罩体，并把它和手部一起当作「真正的手」参与检测
+    use_hand_sphere: bpy.props.BoolProperty(
+        name="手部罩体",
+        description="在左右手各生成一个罩体包裹手部，罩体代替手部参与穿模检测",
+        default=False,
+    )
+
     # 穿模检测结果
     clippings: bpy.props.CollectionProperty(
         type=ClippingRangeItem

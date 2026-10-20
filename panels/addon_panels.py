@@ -2,7 +2,6 @@ from ..operators.bone_operators import SimplifyBoneOperator, FlipPoseOperator, S
 from ..operators.camera_motion_fixer_operators import FindCameraSegmentOperator, CameraMotionFixerOperator
 from ..operators.clipping_detection_operators import ClippingDetectionOperator, ClearClippingOperator, \
     ResetDetectionRangeOperator, ShowClippingTypeOperator, get_detection_progress
-from ..operators.hand_shell_operators import GenerateHandShellOperator
 from ..operators.motion_fixer_operators import MotionFixerOperator, SyncRangeOperator, RemoveOuterKeyframesOperator, \
     RemoveInnerKeyframesOperator, DeselectKeyframesOperator
 from ..operators.utility_operators import ImportVmdPhysicsOperator, RemovePhysicalBoneAnimationOperator, \
@@ -70,10 +69,6 @@ class ToolsPanel(bpy.types.Panel):
         row.operator(UnmutePhysicalBoneAnimationOperator.bl_idname,
                      text=UnmutePhysicalBoneAnimationOperator.bl_label, icon='HIDE_OFF')
 
-        # 手部罩体：按手部骨骼方向算出手的范围，生成一个椭圆罩体
-        col.operator(GenerateHandShellOperator.bl_idname,
-                     text=GenerateHandShellOperator.bl_label, icon="MESH_UVSPHERE")
-
 
 class ClippingDetection_PT_Panel(bpy.types.Panel):
     bl_label = "穿模检测"
@@ -98,6 +93,7 @@ class ClippingDetection_PT_Panel(bpy.types.Panel):
             sub.prop(scene, "frame_start", text="时间范围")
             sub.prop(scene, "frame_end", text="")
         col.prop(props, "proxy_accuracy")
+        col.prop(props, "use_hand_sphere")
 
         if props.show_detection_range:
             custom_row = col.row(align=True)
