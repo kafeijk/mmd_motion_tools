@@ -1,7 +1,7 @@
 from ..operators.bone_operators import SimplifyBoneOperator, FlipPoseOperator, SelectLinkedBoneOperator
 from ..operators.camera_motion_fixer_operators import FindCameraSegmentOperator, CameraMotionFixerOperator
 from ..operators.clipping_detection_operators import ClippingDetectionOperator, ClearClippingOperator, \
-    ResetDetectionRangeOperator, ShowClippingTypeOperator, ToggleDetectionRangeOperator, get_detection_progress
+    ResetDetectionRangeOperator, ShowClippingTypeOperator, get_detection_progress
 from ..operators.motion_fixer_operators import MotionFixerOperator, SyncRangeOperator, RemoveOuterKeyframesOperator, \
     RemoveInnerKeyframesOperator, DeselectKeyframesOperator
 from ..operators.utility_operators import ImportVmdPhysicsOperator, RemovePhysicalBoneAnimationOperator, \
@@ -112,11 +112,10 @@ def draw_detection_range_grid(layout, props):
     这里用同样的 0.4，并让左侧 label 右对齐，手部/小臂/大臂 的文本
     就能和上面的「时间范围」「代理精度」等属性标签竖向对齐。
     """
-    current = set(props.detection_range)
-
-    # 用一个 align=True 的 column 把各行紧凑地叠在一起，
-    # 否则 box 内每行之间会保留默认的纵向间距，看起来按钮上下很空。
+    # 按钮自己就是方块文字，不需要 use_property_split 的 40% 标签栏，
+    # 否则 prop_enum 会在我们手工分好的 0.4 右侧再切一刀，把按钮压窄一半
     grid_col = layout.column(align=True)
+    grid_col.use_property_split = False
 
     for group_label, items in get_detection_range_groups(props):
         for start in range(0, len(items), 2):
@@ -135,23 +134,13 @@ def draw_detection_range_grid(layout, props):
 
             if len(pair) == 2:
                 for identifier, target_label in pair:
-                    op = value_row.operator(
-                        ToggleDetectionRangeOperator.bl_idname,
-                        text=target_label,
-                        depress=identifier in current,
-                    )
-                    op.value = identifier
+                    value_row.prop_enum(props, "detection_range", identifier, text=target_label)
             else:
                 single_split = value_row.split(factor=0.5, align=True)
 
                 left_cell = single_split.row(align=True)
                 identifier, target_label = pair[0]
-                op = left_cell.operator(
-                    ToggleDetectionRangeOperator.bl_idname,
-                    text=target_label,
-                    depress=identifier in current,
-                )
-                op.value = identifier
+                left_cell.prop_enum(props, "detection_range", identifier, text=target_label)
 
                 # 占住右半格，单个按钮只占左半边
                 right_cell = single_split.row(align=True)
