@@ -184,9 +184,6 @@ INIT_PROGRESS_TEXT = "初始化中..."
 # 正常情况下 1% 远小于这个值，进度还是每 1% 刷新一次
 MAX_FRAMES_PER_STEP = 100
 
-STAGE_INIT = "init"
-STAGE_DETECT = "detect"
-
 
 def get_detection_progress():
     """当前检测进度（面板绘制用）"""
@@ -343,8 +340,7 @@ class ClippingDetectionOperator(bpy.types.Operator):
         self.original_scene = context.scene
         self.start_time = time.perf_counter()
 
-        # 阶段状态
-        self.stage = STAGE_INIT
+        # 运行期状态
         self.generator = None
         self.percent = -1
         # 每 1% 对应的帧数，start_detection 里按帧范围算
@@ -377,7 +373,17 @@ class ClippingDetectionOperator(bpy.types.Operator):
 
         set_detection_progress(True, 0.0, INIT_PROGRESS_TEXT)
 
-        # 后台（-b）没有事件循环，modal 永远不会被驱动，直接同步跑完
+        # 初始化 + 建临时场景：从点「执行」到切场景这一整段同步做完，中途不还给 Blender。
+        try:
+            self.init_temp_objects(context)
+            self.start_detection(context)
+        except Exception as error:
+            self.abort(context)
+            traceback.print_exc()
+            self.report({'ERROR'}, f'检测失败：{error}')
+            return {'CANCELLED'}
+
+        # 后台（-b）没有事件循环，modal 永远不会被驱动，直接同步跑完剩下的帧
         if bpy.app.background:
             try:
                 self.run_sync(context)
@@ -423,23 +429,13 @@ class ClippingDetectionOperator(bpy.types.Operator):
         return {'FINISHED'}
 
     def run_sync(self, context):
-        """同步跑完所有阶段（后台测试用）"""
+        """同步跑完逐帧检测"""
         while not self.step(context):
             pass
         self.finish(context)
 
     def step(self, context):
-        """
-        推进一个阶段，全部完成时返回 True
-
-        每个阶段只做一块活：modal 每次 TIMER 只调用一次，Blender 才有机会重绘界面
-        """
-        if self.stage == STAGE_INIT:
-            # 复制临时对象和划分部件放在同一批里做完，即「初始化中...」
-            self.init_temp_objects(context)
-            self.stage = STAGE_DETECT
-            return False
-
+        """推进逐帧检测"""
         return self.step_detection(context)
 
     def init_temp_objects(self, context):
