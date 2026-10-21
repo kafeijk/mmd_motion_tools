@@ -202,8 +202,26 @@ class ClippingDetection_PT_Panel(bpy.types.Panel):
                 col.label(text=progress["text"])
 
         if len(props.clippings) != 0:
-            rows = min(len(props.clippings), 5)
-            col.template_list("MMD_UL_ClippingRange", "", props, "clippings", props, "clipping_index", rows=rows)
+            # 结果显示样式
+            mode_row = col.row(align=True)
+            mode_row.use_property_split = False
+            mode_row.prop(props, "result_list_mode", expand=True)
+
+            # 原生列表的控件没注册上时（比如热重载后类表没刷新）自动退回分页窗口，
+            # 免得 template_list 静默失败、整个结果框凭空消失
+            if props.result_list_mode == 'PAGED' or not can_draw_native_list(props):
+                # 专注模式：每页 5 项（一项 = 列表里的一条结果，对应一段连续穿模帧）。
+                # 页按 clippings 顺序固定分组，一项在页里的行号始终不变。
+                # 当前帧一旦不属于本页任何一项，就整页换到它所在的那一页：刚离开本页最后一项、
+                # 还停在它后面的空档里也算，不用等它走进下一页的第一项；连续播放就是一页页往后翻
+                list_box = col.box()
+                list_box.use_property_split = False
+                rows_col = list_box.column(align=True)
+                for item in get_clipping_items(props, scene.frame_current):
+                    draw_clipping_row(rows_col, props, item, scene.frame_current)
+            else:
+                rows = min(len(props.clippings), 5)
+                col.template_list("MMD_UL_ClippingRange", "", props, "clippings", props, "clipping_index", rows=rows)
 
 
 class FindRepeatedMotion_PT_Panel(bpy.types.Panel):
@@ -360,40 +378,108 @@ def get_clipping_icons(types):
     return icons
 
 
+# 结果列表一次显示几项（和原来 template_list 的 rows=5 一致）
+CLIPPING_LIST_ROWS = 5
+
+
+def get_clipping_items(props, frame, rows=CLIPPING_LIST_ROWS):
+    """
+    结果列表中，这一刻要画的 5 项：按 clippings 的顺序每 5 项分一页，跟着当前帧所在的页走
+
+    这里的「项」就是列表里的一条结果（clippings 里的一项，对应一段连续的穿模帧）。
+
+    - 页是固定分组（第 0-4 项一页、第 5-9 项一页……），所以每一项在页里的行号是固定的：
+      点「起止帧」跳到同一页里的另一项时，列表不会重排
+    - 当前帧一旦不属于本页任何一项，就整页换成它所在的那一页：刚离开本页最后一项、
+      还停在它后面的空档里也算翻页，不用等它走进下一页的第一项
+    - 当前帧落在两项之间的空档里时，按它后面最近的那一项算它在哪一页
+    - 最后一页不足 5 项时往回补几项，保证框里始终是 5 行
+
+    返回 [要画的项, ...]。
+    """
+    items = props.clippings
+    count = len(items)
+    if not count:
+        return []  # 还没有检测结果，什么都不画
+
+    # 1. 先找出「当前帧属于哪一项」：start / end 把当前帧包住的那一项
+    #    next(生成器, None) 是「取第一个满足条件的值，取不到就给 None」
+    index = next(
+        (index for index, item in enumerate(items) if item.start <= frame <= item.end),
+        None,
+    )
+
+    # 2. 当前帧没落在任何一项里时，用「它后面最近的那一项」代表它：
+    #    这样刚离开本页最后一项、还没走进下一项（中间的空档）时，也能马上算出该翻到哪一页；
+    #    后面已经没有项（当前帧比所有项都晚）就退回最后一项
+    if index is None:
+        index = next(
+            (index for index, item in enumerate(items) if item.start > frame),
+            count - 1,
+        )
+
+    # 3. 把「第几项」换算成「第几页的第一项」：
+    #    index // rows 是它落在第几页（0 起），再乘回 rows 就是这一页第一项的下标。
+    #    例（rows=5）：index=7 → 7//5=1（第 1 页）→ start=5（从第 5 项开始画）
+    #    最后一页不满 5 项时改用 count-rows 往回补，保证框里始终画满 5 行；
+    #    count 比 rows 还少时 max(..., 0) 兜底成 0，也就是全部画出来
+    start = min(index // rows * rows, max(count - rows, 0))
+
+    # 4. 从这一页的第一项往后连续取 rows 项；
+    #    末尾的 min(...) 是防止最后一页越界，多出来的那几项直接不取
+    return [items[offset] for offset in range(start, min(start + rows, count))]
+
+
+def draw_clipping_row(layout, props, item, frame):
+    """画结果列表的一行：起止帧按钮 + 这一项里出现过的穿模类型图标"""
+    row = layout.row(align=True)
+    split = row.split(factor=0.8)
+
+    subrow = split.row(align=True)
+    subrow.operator("mmd_motion_tools.jump_frame", text=str(item.start)).frame = item.start
+    subrow.operator("mmd_motion_tools.jump_frame", text=str(item.end)).frame = item.end
+
+    # 当前帧落在这一段的区间内时，取逐帧结果
+    frame_types = get_frame_hits_map(props).get(frame) if item.start <= frame <= item.end else None
+
+    # 右侧：图标
+    subrow = split.row(align=True)
+    # 图标始终按整段的类型汇总显示（段里存的是逗号串，这里拆成列表再分组）
+    icons = get_clipping_icons(split_names(item.types))
+    # 当前帧命中的那部分，只用来决定哪个图标变成可点的按钮
+    hit_icons = get_clipping_icons(frame_types) if frame_types else {}
+
+    # 始终按指定顺序显示
+    for icon_name in ("VIEW_PAN", "MESH_CAPSULE"):
+        if icon_name not in icons:
+            subrow.label(text="", icon="BLANK1")
+        elif icon_name in hit_icons:
+            # 当前帧命中：图标变成按钮，点开后显示这一帧具体的穿模类型
+            op = subrow.operator(ShowClippingTypeOperator.bl_idname, text="", icon=icon_name)
+            op.frame = frame
+            op.types = ", ".join(hit_icons[icon_name])
+        else:
+            # 当前帧没命中这一项：只提示这段出现过这类穿模
+            subrow.label(text="", icon=icon_name)
+
+
 class MMD_UL_ClippingRange(bpy.types.UIList):
-    """穿模检测结果列表"""
+    """穿模检测结果列表（可滚动的那一版，和下面的分页窗口共用同一套行内容）"""
 
     def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
-        frame = context.scene.frame_current
-        row = layout.row(align=True)
-        split = row.split(factor=0.8)
+        draw_clipping_row(layout, data, item, context.scene.frame_current)
 
-        subrow = split.row(align=True)
-        subrow.operator("mmd_motion_tools.jump_frame", text=str(item.start)).frame = item.start
-        subrow.operator("mmd_motion_tools.jump_frame", text=str(item.end)).frame = item.end
 
-        # 当前帧落在这一段的区间内时，取逐帧结果
-        frame_types = get_frame_hits_map(data).get(frame) if item.start <= frame <= item.end else None
+def can_draw_native_list(props):
+    """
+    原生滚动列表能不能画：UIList 类型和 clipping_index 都注册上了才算
 
-        # 右侧：图标
-        subrow = split.row(align=True)
-        # 图标始终按整段的类型汇总显示（段里存的是逗号串，这里拆成列表再分组）
-        icons = get_clipping_icons(split_names(item.types))
-        # 当前帧命中的那部分，只用来决定哪个图标变成可点的按钮
-        hit_icons = get_clipping_icons(frame_types) if frame_types else {}
-
-        # 始终按指定顺序显示
-        for icon_name in ("VIEW_PAN", "MESH_CAPSULE"):
-            if icon_name not in icons:
-                subrow.label(text="", icon="BLANK1")
-            elif icon_name in hit_icons:
-                # 当前帧命中：图标变成按钮，点开后显示这一帧具体的穿模类型
-                op = subrow.operator(ShowClippingTypeOperator.bl_idname, text="", icon=icon_name)
-                op.frame = frame
-                op.types = ", ".join(hit_icons[icon_name])
-            else:
-                # 当前帧没命中这一项：只提示这段出现过这类穿模
-                subrow.label(text="", icon=icon_name)
+    template_list 在「列表类型没找到」或「active 属性不存在」时不会报错，
+    只是往控制台打一行 warning，然后什么都不画——结果框会整个消失，
+    所以画之前先自己检查一遍，缺东西就退回分页窗口
+    """
+    return (hasattr(bpy.types, "MMD_UL_ClippingRange")
+            and "clipping_index" in props.bl_rna.properties)
 
 
 class MMD_UL_RepeatedRange(bpy.types.UIList):

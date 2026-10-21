@@ -59,7 +59,7 @@ def keep_detection_range(props):
 
 
 class ClippingRangeItem(bpy.types.PropertyGroup):
-    """一段连续的穿模区间"""
+    """结果列表里的一项：一段连续的穿模帧区间"""
     start: bpy.props.IntProperty(name="起始帧")
     end: bpy.props.IntProperty(name="结束帧")
     # 这段里出现过的部件对名称，多个用 ", " 分隔
@@ -175,6 +175,17 @@ class ClippingDetectionProperty(bpy.types.PropertyGroup):
         type=ClippingRangeItem
     )
 
+    # 结果列表的显示方式（面板上画成一个二选一的分段按钮）：
+    result_list_mode: bpy.props.EnumProperty(
+        name="结果显示样式",
+        description="穿模检测结果的显示方式",
+        items=[
+            ("SCROLL", "预览模式", "滚动列表样式，展示全部检测结果"),
+            ("PAGED", "专注模式", "翻页样式，根据当前帧自动切换至对应页面"),
+        ],
+        default="SCROLL",
+    )
+
     # 逐帧穿模结果：{帧: 穿模类型} 的可持久化版本
     # （集合本身没法当字典查，UIList 里用 get_frame_hits_map 转成字典）
     frame_hits: bpy.props.CollectionProperty(
@@ -184,7 +195,7 @@ class ClippingDetectionProperty(bpy.types.PropertyGroup):
     # 逐帧结果的版本号：每次检测后自增，用来让 get_frame_hits_map 的缓存失效
     frame_hits_version: bpy.props.IntProperty(default=0)
 
-    # 列表里当前选中项的索引
+    # 列表里当前选中项的索引（可滚动列表用）
     clipping_index: bpy.props.IntProperty()
 
     @staticmethod
