@@ -159,14 +159,17 @@ class ClippingDetectionProperty(bpy.types.PropertyGroup):
     # 检测结束后是否删掉临时生成的部件代理网格
     remove_tmp: bpy.props.BoolProperty(
         name="删除临时对象",
-        description="删除临时对象",
+        description="检测结束后删除临时生成的部件代理网格\n"
+                    "不勾选时，代理网格将保留在「穿模检测临时集合」中，并在下次执行检测时自动清理",
         default=True
     )
 
     # 是否生成手部罩体，并把它和手部一起当作「真正的手」参与检测
     use_hand_sphere: bpy.props.BoolProperty(
         name="手部罩体",
-        description="在左右手各生成一个罩体包裹手部，罩体代替手部参与穿模检测",
+        description="在左右手各生成一个罩体包裹手部，并以罩体代替手部参与穿模检测\n"
+                    "罩体、手部代理网格及临时骨架统一存放在「罩体」集合中，其中后两者默认隐藏\n"
+                    "生成的对象不会被「删除临时对象」选项清理，但每次执行检测时都会重新生成",
         default=False,
     )
 

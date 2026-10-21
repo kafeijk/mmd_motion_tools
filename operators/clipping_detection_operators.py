@@ -7,7 +7,8 @@ import mathutils
 from ..properties.clipping_detection_properties import get_ordered_detection_range, set_frame_hits, \
     clear_clipping_results, get_clipping_type_labels
 from ..utils import *
-from .hand_shell_operators import create_hand_spheres, update_hand_spheres
+from .hand_shell_operators import create_hand_spheres, update_hand_spheres, \
+    HAND_SPHERE_COLLECTION_NAME
 
 VG_NAMES = [""]
 VG_PAIRS = [""]
@@ -164,6 +165,10 @@ TMP_ANALYSIS_COLLECTION_NAME = "穿模检测临时集合"
 # 临时对象的标记属性
 TMP_OBJECT_TAG = "mmd_motion_tools_tmp"
 
+# 勾了手部罩体时，这两块手部代理网格属于「罩体专用」：不精简、建在「罩体」集合里、
+# 隐藏，检测结束也不跟着临时对象一起删（下次执行开始时，和临时集合一起清掉再重建）
+SPHERE_PARTS = tuple(f"HAND.{side}" for side in SIDES)
+
 # 检测进度：检测过程中会切到临时场景，scene 上的属性那时读的是另一个场景，
 # 所以进度放在模块级，面板直接从 get_detection_progress() 取
 _DETECTION_PROGRESS = {
@@ -253,6 +258,23 @@ def add_spine_bones_to_torso(part_vgs, armature):
             torso.append(name)
 
 
+def clear_previous_temp_objects():
+    """
+    清掉上一次执行留下的所有临时对象
+
+    - 「穿模检测临时集合」：上一次的部件代理网格
+    - 「罩体」集合：罩体专用对象（HAND 代理网格 / 临时骨架 / 罩体）
+
+    它们都是临时对象、不是 MMD 模型的一部分，所以必须在收集 objects 之前删干净，
+    否则会被当成模型的网格算进去（勾不勾罩体、勾不勾删除临时对象都一样）。
+    集合清空后一并删掉，需要时再新建——每次执行都是重新生成。
+    """
+    for collection_name in (TMP_ANALYSIS_COLLECTION_NAME, HAND_SPHERE_COLLECTION_NAME):
+        collection = bpy.data.collections.get(collection_name)
+        if collection is not None:
+            remove_part_meshes(collection, remove_empty_collection=True)
+
+
 class ClippingDetectionOperator(bpy.types.Operator):
     bl_idname = "mmd_motion_tools.detect_clipping"
     bl_label = "执行"
@@ -260,6 +282,11 @@ class ClippingDetectionOperator(bpy.types.Operator):
     bl_options = {'REGISTER', 'UNDO'}
 
     def check_props(self, context):
+        # 上一次执行留下的临时对象（临时集合 + 罩体集合）在这里一起清掉：
+        # 删除时机一致——每次执行的开始，并且早于下面收集 objects，
+        # 不然它们会被当成模型的网格算进去
+        clear_previous_temp_objects()
+
         if not is_mmd_tools_enabled():
             self.report({'ERROR'}, '未启用mmd_tools插件！')
             return None
@@ -330,6 +357,9 @@ class ClippingDetectionOperator(bpy.types.Operator):
         self.part_objs = {}
         self.part_vgs = {}
         self.hand_spheres = []
+        # 罩体专用部分：集合和要单独放的部件名（勾了手部罩体时才有值）
+        self.sphere_col = None
+        self.sphere_parts = ()
         # 执行前已存在的网格/形态键数据块，清理时只动这次新建的
         self.mesh_pointers_before = None
         self.key_pointers_before = None
@@ -417,34 +447,43 @@ class ClippingDetectionOperator(bpy.types.Operator):
         tmp_col = get_collection(TMP_ANALYSIS_COLLECTION_NAME)
         # 集合被隐藏/排除时里面的对象选不中，join、复制修改器都会 poll 失败，先恢复显示
         show_collection(tmp_col)
-        # 先按对象上的标记清一次
-        remove_part_meshes(tmp_col)
         # 记录执行前已有的网格、形态键数据块：后面清理临时对象时，只清理本次新建的，
         # 不会误删用户自己留在文件里的孤立数据
         self.mesh_pointers_before = {mesh.as_pointer() for mesh in bpy.data.meshes}
         self.key_pointers_before = {key.as_pointer() for key in bpy.data.shape_keys}
 
         self.tmp_col = tmp_col
+
+        # 勾了手部罩体时，罩体专用对象（HAND 代理网格 / 临时骨架 / 罩体）都放「罩体」集合里：
+        # 它们在检测结束后要留着，所以不能混进临时集合被「删除临时对象」清掉
+        if self.props.use_hand_sphere:
+            self.sphere_col = get_collection(HAND_SPHERE_COLLECTION_NAME)
+            show_collection(self.sphere_col)
+            self.sphere_parts = SPHERE_PARTS
+
         self.tmp_obj = create_tmp_obj(context, self.objects, tmp_col)
         self.part_objs = self.create_part_objects()
 
         # create_part_meshes 最后会把合并出来的临时网格删掉，这里别留悬空引用
         self.tmp_obj = None
 
-        # 临时网格改用精简过的临时骨架：原骨架里大部分骨骼跟检测无关，
+        # 临时网格改用精简过的临时骨架：原骨架里大部分骨骼跟检测无关。
+        # 勾了罩体时骨架放进「罩体」集合：罩体要一直用它，检测结束也不删，只在里面隐藏
         part_objs = list(self.part_objs.values())
+        armature_col = self.sphere_col or tmp_col
         self.tmp_armature = create_tmp_armature(
-            context, self.armature, tmp_col, part_objs, self.part_vgs)
+            context, self.armature, armature_col, part_objs, self.part_vgs)
         repoint_armature_modifiers(part_objs, self.tmp_armature)
 
-        # 手部罩体：按静置姿态手部网格分别创建左右罩体，挂到临时集合里一起清理
-        if self.props.use_hand_sphere:
+        # 手部罩体：按静置姿态的手部代理网格分别创建左右罩体（HAND 代理网格已经在
+        # 「罩体」集合里。不精 HAND 代理，简罩体才能贴得准）
+        if self.sphere_col is not None:
             hand_objs = {
                 side: self.part_objs.get(f"HAND.{side}")
                 for side in SIDES
             }
             self.hand_spheres = create_hand_spheres(
-                context, self.tmp_armature, hand_objs, tmp_col, TMP_OBJECT_TAG)
+                context, self.tmp_armature, hand_objs, self.sphere_col, TMP_OBJECT_TAG)
             if not self.hand_spheres:
                 # 依然放行
                 self.report({'WARNING'}, '未生成手部罩体：没有找到手部顶点或手部骨骼')
@@ -479,7 +518,9 @@ class ClippingDetectionOperator(bpy.types.Operator):
                 if side_vertices.get(side):
                     part_vertices[f"{category}.{side}"] = side_vertices[side]
 
-        return create_part_meshes(self.props, self.tmp_obj, part_vertices, self.tmp_col)
+        return create_part_meshes(
+            self.props, self.tmp_obj, part_vertices, self.tmp_col,
+            sphere_parts=self.sphere_parts, sphere_col=self.sphere_col)
 
     def start_detection(self, context):
         """切到空白场景并建好逐帧生成器（不动原场景，避免依赖图整体重算）"""
@@ -501,6 +542,14 @@ class ClippingDetectionOperator(bpy.types.Operator):
         self.set_solid_shading(context)
         # 恢复集合及内部网格的显示
         get_collection(TMP_ANALYSIS_COLLECTION_NAME)
+        # 罩体在自己的「罩体」集合里，新场景里也要链一份，否则依赖图求值不到它
+        if self.sphere_col is not None:
+            get_collection(HAND_SPHERE_COLLECTION_NAME)
+            # hide_set 是按视图层记的：罩体专用的手部代理网格在新场景里再藏一次
+            for part in self.sphere_parts:
+                part_obj = self.part_objs.get(part)
+                if part_obj is not None:
+                    part_obj.hide_set(True)
         # hide_set 是按视图层生效的，新场景的视图层里再藏一次
         self.tmp_armature.hide_set(True)
 
@@ -653,7 +702,11 @@ class ClippingDetectionOperator(bpy.types.Operator):
         无论哪种情况都清掉这次新产生、已经没人用的孤立网格/形态键数据块。
         """
         if remove_objects and self.tmp_col is not None:
-            remove_part_meshes(self.tmp_col, self.part_objs.values(), True)
+            temp_objs = [
+                part_obj for part, part_obj in self.part_objs.items()
+                if part not in self.sphere_parts
+            ]
+            remove_part_meshes(self.tmp_col, temp_objs, True)
         purge_temp_datablocks(self.mesh_pointers_before, self.key_pointers_before)
 
     def abort(self, context):
@@ -1061,7 +1114,7 @@ def classify_vertices(obj, part_vgs, threshold=0.25):
 
 
 @timeit
-def create_part_meshes(props, obj, part_vertices, col):
+def create_part_meshes(props, obj, part_vertices, col, sphere_parts=(), sphere_col=None):
     """
     把临时网格按身体部件拆成多个代理网格
 
@@ -1211,7 +1264,11 @@ def create_part_meshes(props, obj, part_vertices, col):
         part_obj = bpy.data.objects.new(f"{part}", mesh)
         # 打上临时对象标记
         part_obj[TMP_OBJECT_TAG] = True
-        col.objects.link(part_obj)
+        # 罩体专用的部件建在「罩体」集合里：检测结束后要留着，不能混进临时集合
+        if sphere_col is not None and part in sphere_parts:
+            sphere_col.objects.link(part_obj)
+        else:
+            col.objects.link(part_obj)
         part_obj.matrix_world = obj.matrix_world.copy()
 
         # 复制顶点组。
@@ -1233,7 +1290,11 @@ def create_part_meshes(props, obj, part_vertices, col):
     # 5. 减面
     # ------------------------------------------------------------------
     proxy_accuracy = props.proxy_accuracy
-    for part_obj in part_objs.values():
+    for part, part_obj in part_objs.items():
+        # 罩体专用的手部代理网格不减面
+        if part in sphere_parts:
+            continue
+
         face_count = len(part_obj.data.polygons)
 
         select_only_objects(bpy.context, [part_obj])
@@ -1264,6 +1325,13 @@ def create_part_meshes(props, obj, part_vertices, col):
         polygons = part_obj.data.polygons
         polygons.foreach_set("use_smooth", [True] * len(polygons))
         part_obj.data.update()
+
+    # 8. 罩体专用的手部代理网格隐藏（眼睛图标）：它只在罩体 Shrinkwrap 时当目标用。
+    #    必须放在最后——上面复制骨架修改器要靠选中，隐藏的对象选不中
+    for part in sphere_parts:
+        part_obj = part_objs.get(part)
+        if part_obj is not None:
+            part_obj.hide_set(True)
 
     return part_objs
 

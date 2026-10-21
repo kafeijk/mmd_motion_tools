@@ -1,4 +1,4 @@
-"""手部罩体：穿模检测时包裹手部的临时罩体
+"""手部罩体：穿模检测时包裹手部的罩体
 
 罩体由「正方体 + 3 级 Catmull-Clark 表面细分」应用得到（384 面），再依次添加：
     - Armature：顶点组权重 手首.L / 手首.R，跟随临时骨架
@@ -7,7 +7,10 @@
 
 创建时按角色静置姿态的手部网格确定罩体中心与初始大小；检测时逐帧调整
 Shrinkwrap.offset（步长 0.001），让罩体正好包住手，并给 offset 打关键帧。
-罩体本身是临时对象（带 TMP_OBJECT_TAG），会按「删除临时对象」开关清理。
+
+罩体放在自己的「罩体」集合里，不属于「穿模检测临时集合」：检测结束会保留下来，
+「删除临时对象」也清不到它。同一个集合里还放着它专用的手部代理网格（不精简、隐藏）
+和精简后的临时骨架（隐藏）——这三样都属于「罩体专用」，每次执行检测前整组重建。
 """
 
 import bmesh
@@ -27,10 +30,13 @@ HAND_SPHERE_SMOOTH_FACTOR = 1.0
 # Shrinkwrap 偏移的单次调整幅度
 HAND_SPHERE_OFFSET_STEP = 0.001
 
-# 罩体对象上的标记，便于从临时集合里认出它
+# 罩体对象上的标记，便于从集合里认出它
 HAND_SPHERE_TAG = "mmd_motion_tools_hand_sphere"
 
 HAND_SPHERE_SIDES = ("L", "R")
+
+# 罩体自己的集合名：罩体不属于「穿模检测临时集合」，检测结束要保留
+HAND_SPHERE_COLLECTION_NAME = "罩体"
 
 
 def get_hand_local_cos(hand_obj, depsgraph=None):
@@ -68,7 +74,7 @@ def create_cube_object(name, side, collection, temp_tag):
     mesh.update()
 
     obj = bpy.data.objects.new(name, mesh)
-    # 临时对象标记 + 罩体自己的标记，清理和排查都要用
+    # 临时标记 + 罩体自己的标记：重新检测时靠这两个标记把上一次的罩体认出来删掉
     obj[temp_tag] = True
     obj[HAND_SPHERE_TAG] = True
     obj["mmd_hand_sphere_side"] = side
