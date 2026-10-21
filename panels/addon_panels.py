@@ -74,11 +74,9 @@ def get_detection_range_groups(props):
     """
     按「手部 / 小臂 / 大臂」把检测范围分组
 
-    默认范围排在前面，额外的范围（自定义拓展、大臂-躯干）排在后面；
-    这样常用的按钮先出现，和默认检测范围的顺序一致。
+    items 怎么排，面板上的按钮就怎么排。默认勾选哪些（default）只决定按钮亮不亮，
     """
     range_props = props.bl_rna.properties["detection_range"]
-    default_flags = set(range_props.default_flag)
 
     groups = {}
     for item in range_props.enum_items:
@@ -94,14 +92,9 @@ def get_detection_range_groups(props):
         if target_label == "自定义拓展":
             target_label = "自定义"
 
-        group = groups.setdefault(group_label, {"default": [], "extra": []})
-        bucket = "default" if identifier in default_flags else "extra"
-        group[bucket].append((identifier, target_label))
+        groups.setdefault(group_label, []).append((identifier, target_label))
 
-    return [
-        (group_label, group["default"] + group["extra"])
-        for group_label, group in groups.items()
-    ]
+    return list(groups.items())
 
 
 def draw_detection_range_grid(layout, props):
