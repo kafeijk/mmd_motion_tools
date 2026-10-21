@@ -92,7 +92,12 @@ def apply_subdivision(context, ball):
     ensure_object_mode(context)
     select_only_objects(context, [ball])
     bpy.context.view_layer.objects.active = ball
-    bpy.ops.object.modifier_apply(modifier=modifier.name)
+    try:
+        bpy.ops.object.modifier_apply(modifier=modifier.name)
+    finally:
+        ball.select_set(False)
+        if bpy.context.view_layer.objects.active is ball:
+            bpy.context.view_layer.objects.active = None
 
 
 def fit_ball_to_hand(mesh, hand_center, hand_radius):

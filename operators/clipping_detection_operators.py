@@ -553,6 +553,14 @@ class ClippingDetectionOperator(bpy.types.Operator):
         # hide_set 是按视图层生效的，新场景的视图层里再藏一次
         self.tmp_armature.hide_set(True)
 
+        # 检测期间不需要任何物体被选中
+        for obj in context.view_layer.objects:
+            try:
+                if obj.select_get():
+                    obj.select_set(False)
+            except ReferenceError:
+                continue
+
         self.generator = iter_detect_collisions(
             pairs, frame_start, frame_end, pair_names=pair_key_map,
             hand_spheres=self.hand_spheres)
