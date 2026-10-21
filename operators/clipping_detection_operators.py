@@ -583,6 +583,7 @@ class ClippingDetectionOperator(bpy.types.Operator):
         target_props.show_detection_range = source_props.show_detection_range
         target_props.remove_tmp = source_props.remove_tmp
         target_props.use_hand_sphere = source_props.use_hand_sphere
+        target_props.result_list_mode = source_props.result_list_mode
 
         # custom_bones_str 的 update 会自动勾上「自定义拓展」那几项，所以它先写；
         target_props.custom_bones_str = source_props.custom_bones_str
@@ -634,7 +635,10 @@ class ClippingDetectionOperator(bpy.types.Operator):
         props = self.props
         merged = self.merged
 
+        # 清掉上一轮结果，同时把结果列表切回「预览模式」：
         props.clippings.clear()
+        props.result_list_mode = 'SCROLL'
+
         total_frames = 0
         for (seg_start, seg_end), names in merged.items():
             item = props.clippings.add()
