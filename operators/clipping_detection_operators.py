@@ -344,6 +344,11 @@ class ClippingDetectionOperator(bpy.types.Operator):
         self.original_scene = context.scene
         self.start_time = time.perf_counter()
 
+        # 每次执行立刻清掉上一轮的结果，并切回「预览模式」：
+        # 检测期间面板上不会留着上一次的数据，结果只反映这一轮
+        clear_clipping_results(self.props)
+        self.props.result_list_mode = 'SCROLL'
+
         # 运行期状态
         self.generator = None
         self.percent = -1
@@ -409,7 +414,7 @@ class ClippingDetectionOperator(bpy.types.Operator):
             # 例外：按 ESC 中止，先把场景和临时数据收拾干净再退出
             if event.type == 'ESC':
                 self.abort(context)
-                self.report({'INFO'}, '已取消检测')
+                self.report({'INFO'}, '已取消检测，已检测的结果已保留')
                 return {'CANCELLED'}
             return {'RUNNING_MODAL'}
 
@@ -567,7 +572,7 @@ class ClippingDetectionOperator(bpy.types.Operator):
 
         self.generator = iter_detect_collisions(
             pairs, frame_start, frame_end, pair_names=pair_key_map,
-            hand_spheres=self.hand_spheres)
+            hand_spheres=self.hand_spheres, frame_hits=self.frame_hits)
 
         # 先亮一个 0%，让用户看到「已经开始了」，而不是停在初始化那一条上
         self.percent = 0
@@ -630,21 +635,18 @@ class ClippingDetectionOperator(bpy.types.Operator):
                 f"检测中 {percent}%（{index}/{total} 帧）")
             return False
 
-    def finish(self, context):
-        """写入结果并收拾临时场景、临时对象"""
-        if self.timer is not None:
-            context.window_manager.event_timer_remove(self.timer)
-            self.timer = None
+    def write_results(self):
+        """
+        把当前收集到的结果写进面板属性，返回 (段数, 总帧数)
 
+        上一轮结果在执行开始时就已经清掉了（见 execute），所以这里直接写；
+        检测正常结束和取消时都走这里，取消时写的就是已经测到的那部分。
+        """
         props = self.props
-        merged = self.merged
-
-        # 清掉上一轮结果，同时把结果列表切回「预览模式」：
         props.clippings.clear()
-        props.result_list_mode = 'SCROLL'
 
         total_frames = 0
-        for (seg_start, seg_end), names in merged.items():
+        for (seg_start, seg_end), names in self.merged.items():
             item = props.clippings.add()
             item.start = seg_start
             item.end = seg_end
@@ -653,6 +655,18 @@ class ClippingDetectionOperator(bpy.types.Operator):
 
         # 逐帧结果也存一份，列表可以按当前帧显示更精确的穿模类型
         set_frame_hits(props, self.frame_hits)
+        return len(self.merged), total_frames
+
+    def finish(self, context):
+        """写入结果并收拾临时场景、临时对象"""
+        if self.timer is not None:
+            context.window_manager.event_timer_remove(self.timer)
+            self.timer = None
+
+        props = self.props
+
+        # 上一轮结果在执行开始时已经清掉了，这里只写这一轮的结果
+        segment_count, total_frames = self.write_results()
 
         self.restore_scene(context)
 
@@ -670,10 +684,10 @@ class ClippingDetectionOperator(bpy.types.Operator):
 
         set_detection_progress(False)
 
-        if not merged:
+        if not segment_count:
             self.report({'INFO'}, '未检测到穿模!')
         else:
-            self.report({'INFO'}, f'检测到 {len(merged)} 段穿模，共 {total_frames} 帧')
+            self.report({'INFO'}, f'检测到 {segment_count} 段穿模，共 {total_frames} 帧')
 
         print(f"总耗时: {time.perf_counter() - self.start_time:.4f} 秒")
 
@@ -742,11 +756,17 @@ class ClippingDetectionOperator(bpy.types.Operator):
         purge_temp_datablocks(self.mesh_pointers_before, self.key_pointers_before)
 
     def abort(self, context):
-        """取消（ESC）或异常时收拾现场"""
+        """取消（ESC）或异常时收拾现场，已经测到的帧照样保留"""
         try:
             if self.timer is not None:
                 context.window_manager.event_timer_remove(self.timer)
                 self.timer = None
+
+            # 逐帧结果一直记在 self.frame_hits 里（生成器边测边往里写），
+            # 这里把它压成区间再写进面板
+            self.merged = merge_frame_hits(self.frame_hits) if self.frame_hits else {}
+            self.write_results()
+
             self.restore_scene(context)
             # 取消也要把罩体挂回原骨架：它们要留在场景里，不能继续指着随后会被清掉的临时骨架
             self.bind_sphere_objects_to_armature()
@@ -1494,13 +1514,16 @@ def get_bvh_for(obj, depsgraph):
 
 
 def iter_detect_collisions(pairs, start, end, merge_on_type_change=True, pair_names=None,
-                           hand_spheres=None):
+                           hand_spheres=None, frame_hits=None):
     """
     逐帧检测各部件代理网格之间是否相交（生成器版本）
 
     每处理完一帧就 yield 一次 (已处理帧数, 总帧数)，让调用方有机会把控制权还给
     Blender 刷新界面；检测结束时的返回值是 (merged, frame_hits)，
     从 StopIteration.value 里取。同步版本见 detect_collisions_between_objects。
+
+    frame_hits 传一个字典进来时，命中的帧会边测边写进去（不是等全部跑完）：
+    中途取消也能拿到已经测到的部分。
 
     hand_spheres 不为空时，每帧先调整罩体的 Shrinkwrap.offset（步长 0.001）并打关键帧，
     有罩体的一侧直接用罩体作为手部参与碰撞；没有罩体时才退回手部代理网格。
@@ -1513,7 +1536,9 @@ def iter_detect_collisions(pairs, start, end, merge_on_type_change=True, pair_na
     scene = bpy.context.scene
 
     # 逐帧结果：frame -> [穿模类型, ...]（同一帧里命中的多个部件对都会收进来）
-    frame_hits = {}
+    # 调用方给了字典就用它，这样取消时外面能读到已经测到的部分
+    if frame_hits is None:
+        frame_hits = {}
     total = end - start + 1
 
     hand_spheres = list(hand_spheres or ())
