@@ -111,8 +111,11 @@ class ClippingFrameHit(bpy.types.PropertyGroup):
 class ClippingDetectionProperty(bpy.types.PropertyGroup):
 
     # 检测预设：一键套用一组常用设置（代理精度 / 手部罩体 / 检测范围等）
+    # name 留空是有意的：面板上用自绘的「检测预设」标签（和其它参数对齐），
+    # 而 Blender 打开枚举下拉菜单时会把属性名再当菜单标题画一行，
+    # name 为空就不会多出那一行（description 照旧作为悬浮提示）
     detection_preset: bpy.props.EnumProperty(
-        name="检测预设",
+        name="",
         description="一键套用一组常用设置",
         items=[
             ("GENERAL", "通用", "适用于多数MMD模型"),
