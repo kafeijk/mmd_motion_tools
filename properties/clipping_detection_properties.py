@@ -63,13 +63,11 @@ DETECTION_PRESETS = {
     "GENERAL": {
         "proxy_accuracy": 'BALANCED',
         "use_hand_sphere": False,
-        "remove_tmp": True,
         "detection_range": ("HAND-BREAST", "FOREARM-BREAST"),
     },
     "BODY": {
         "proxy_accuracy": 'FULL',
         "use_hand_sphere": True,
-        "remove_tmp": True,
         "detection_range": "DEFAULT",
     },
 }
