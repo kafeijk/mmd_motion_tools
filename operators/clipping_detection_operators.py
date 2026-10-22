@@ -427,11 +427,18 @@ class ClippingDetectionOperator(bpy.types.Operator):
         # 初始化 + 建临时场景：从点「执行」到切场景这一整段同步做完，中途不还给 Blender。
         try:
             self.init_temp_objects(context)
-            self.start_detection(context)
+            started = self.start_detection(context)
         except Exception as error:
             self.abort(context)
             traceback.print_exc()
             self.report({'ERROR'}, f'检测失败：{error}')
+            return {'CANCELLED'}
+
+        # 一条有效检测配对都没建出来：选中的部件没有生成代理网格
+        # （骨骼/顶点组命名不匹配、权重为空等），直接提示
+        if not started:
+            self.abort(context)
+            self.report({'ERROR'}, '代理网格生成失败：所选检测项目未匹配到有效骨骼或顶点组，请检查命名及权重设置')
             return {'CANCELLED'}
 
         # 后台（-b）没有事件循环，modal 永远不会被驱动，直接同步跑完剩下的帧
@@ -588,6 +595,8 @@ class ClippingDetectionOperator(bpy.types.Operator):
         """切到空白场景并建好逐帧生成器（不动原场景，避免依赖图整体重算）"""
         detection_range = get_ordered_detection_range(self.props)
         pairs, pair_key_map = build_detection_pairs(self.part_objs, detection_range)
+        if not pairs:
+            return False
 
         # 帧范围要在切换场景前读，换场景后读到的会是新场景的默认值
         frame_start = self.original_scene.frame_start
@@ -628,6 +637,7 @@ class ClippingDetectionOperator(bpy.types.Operator):
         # 先亮一个 0%，让用户看到「已经开始了」，而不是停在初始化那一条上
         self.percent = 0
         set_detection_progress(True, 0.0, f"检测中 0%（0/{self.total_frames} 帧）")
+        return True
 
     @classmethod
     def sync_scene_range(cls, source, target):
