@@ -1,7 +1,7 @@
 from ..operators.bone_operators import SimplifyBoneOperator, FlipPoseOperator, SelectLinkedBoneOperator
 from ..operators.camera_motion_fixer_operators import FindCameraSegmentOperator, CameraMotionFixerOperator
 from ..operators.clipping_detection_operators import ClippingDetectionOperator, ClearClippingOperator, \
-    ResetDetectionRangeOperator, ShowClippingTypeOperator, get_detection_progress
+    ShowClippingTypeOperator, get_detection_progress
 from ..operators.motion_fixer_operators import MotionFixerOperator, SyncRangeOperator, RemoveOuterKeyframesOperator, \
     RemoveInnerKeyframesOperator, DeselectKeyframesOperator
 from ..operators.utility_operators import ImportVmdPhysicsOperator, RemovePhysicalBoneAnimationOperator, \
@@ -181,8 +181,6 @@ class ClippingDetection_PT_Panel(bpy.types.Panel):
         range_toggle_row = col.row(align=True)
         range_toggle_row.prop(props, "show_detection_range")
         if props.show_detection_range:
-            range_toggle_row.operator(ResetDetectionRangeOperator.bl_idname, text="", icon="FILE_REFRESH")
-
             # 自定义拓展和检测项放在一个 box 里，背景色与其它参数区分开
             box = col.box()
             box.use_property_split = True
