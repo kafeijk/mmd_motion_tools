@@ -454,7 +454,7 @@ class ClippingDetectionOperator(bpy.types.Operator):
 
         self.tmp_col = tmp_col
 
-        # 勾了手部罩体时，罩体专用对象（HAND 代理网格 / 临时骨架 / 罩体）都放「罩体」集合里：
+        # 勾了手部罩体时，罩体专用对象（HAND 代理网格 / 罩体）放「罩体」集合里：
         # 它们在检测结束后要留着，所以不能混进临时集合被「删除临时对象」清掉
         if self.props.use_hand_sphere:
             self.sphere_col = get_collection(HAND_SPHERE_COLLECTION_NAME)
@@ -468,15 +468,14 @@ class ClippingDetectionOperator(bpy.types.Operator):
         self.tmp_obj = None
 
         # 临时网格改用精简过的临时骨架：原骨架里大部分骨骼跟检测无关。
-        # 勾了罩体时骨架放进「罩体」集合：罩体要一直用它，检测结束也不删，只在里面隐藏
+        # 临时骨架始终建在「穿模检测临时集合」里，删不删跟着「删除临时对象」走
         part_objs = list(self.part_objs.values())
-        armature_col = self.sphere_col or tmp_col
         self.tmp_armature = create_tmp_armature(
-            context, self.armature, armature_col, part_objs, self.part_vgs)
+            context, self.armature, tmp_col, part_objs, self.part_vgs)
         repoint_armature_modifiers(part_objs, self.tmp_armature)
 
         # 手部罩体：按静置姿态的手部代理网格分别创建左右罩体（HAND 代理网格已经在
-        # 「罩体」集合里。不精 HAND 代理，简罩体才能贴得准）
+        # 「罩体」集合里，不做减面，罩体才能贴得准）
         if self.sphere_col is not None:
             hand_objs = {
                 side: self.part_objs.get(f"HAND.{side}")
@@ -657,6 +656,9 @@ class ClippingDetectionOperator(bpy.types.Operator):
 
         self.restore_scene(context)
 
+        # 罩体和它的缩裹目标（HAND 代理网格）挂回原骨架
+        self.bind_sphere_objects_to_armature()
+
         # 临时部件代理网格按开关删除；中间产生的孤立数据块每次都要清，
         # 因为代理网格里已经不含形态键，留着也不会被用到
         self.clean_tmp_data(remove_objects=props.remove_tmp)
@@ -711,6 +713,19 @@ class ClippingDetectionOperator(bpy.types.Operator):
                 area.spaces.active.shading.type = previous
         self.shading_before = {}
 
+    def bind_sphere_objects_to_armature(self):
+        """
+        把罩体和它缩裹用的手部代理网格挂回原骨架，因为用户修复动作时使用的是原骨架
+        """
+        if self.sphere_col is None:
+            return
+
+        targets = [sphere.obj for sphere in self.hand_spheres]
+        targets.extend(
+            part_obj for part, part_obj in self.part_objs.items()
+            if part in self.sphere_parts)
+        repoint_armature_modifiers(targets, self.armature)
+
     def clean_tmp_data(self, remove_objects):
         """
         收拾临时数据
@@ -733,6 +748,8 @@ class ClippingDetectionOperator(bpy.types.Operator):
                 context.window_manager.event_timer_remove(self.timer)
                 self.timer = None
             self.restore_scene(context)
+            # 取消也要把罩体挂回原骨架：它们要留在场景里，不能继续指着随后会被清掉的临时骨架
+            self.bind_sphere_objects_to_armature()
             self.clean_tmp_data(remove_objects=True)
             if self.view_layer is not None:
                 select_only_objects(context, self.selected_before)
@@ -1043,12 +1060,12 @@ def show_collection(collection):
     layer_collection.hide_viewport = False
 
 
-def repoint_armature_modifiers(mesh_objects, tmp_armature):
-    """把临时网格的骨架修改器指向临时骨架"""
+def repoint_armature_modifiers(mesh_objects, armature):
+    """把网格的骨架修改器统统指向指定骨架（检测期间指临时骨架，收尾时指回原骨架）"""
     for obj in mesh_objects:
         for modifier in obj.modifiers:
             if modifier.type == 'ARMATURE':
-                modifier.object = tmp_armature
+                modifier.object = armature
 
 
 @timeit

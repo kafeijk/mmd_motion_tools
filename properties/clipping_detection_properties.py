@@ -214,8 +214,9 @@ class ClippingDetectionProperty(bpy.types.PropertyGroup):
     use_hand_sphere: bpy.props.BoolProperty(
         name="手部罩体",
         description="在左右手各生成一个罩体包裹手部，并以罩体代替手部参与穿模检测\n"
-                    "罩体、手部代理网格及临时骨架统一存放在「罩体」集合中，其中后两者默认隐藏\n"
-                    "生成的对象不会被「删除临时对象」选项清理，但每次执行检测时都会重新生成",
+                    "罩体及其缩裹用的手部代理网格存放在「罩体」集合中，其中代理网格默认隐藏\n"
+                    "检测结束后它们会挂回原骨架，且不会被「删除临时对象」选项清理，"
+                    "但每次执行检测时都会重新生成",
         default=False,
     )
 
