@@ -142,26 +142,26 @@ class ClippingDetectionProperty(bpy.types.PropertyGroup):
         description="选择参与穿模检测的部件对，可多选",
         items=[
             ("HAND-TORSO", "手部-躯干", "手部-躯干"),
-            ("HAND-LOWER_LIMBS", "手部-下肢", "手部-下肢"),
-            ("HAND-HEAD", "手部-头部", "手部-头部"),
-            ("HAND-UPPER_ARM", "手部-大臂", "手部-大臂"),
             ("HAND-BREAST", "手部-胸部", "手部-胸部"),
+            ("HAND-HEAD", "手部-头部", "手部-头部"),
+            ("HAND-LOWER_LIMBS", "手部-下肢", "手部-下肢"),
+            ("HAND-UPPER_ARM", "手部-大臂", "手部-大臂"),
             # 同一部件的左右互检：左手 vs 右手
             ("HAND-HAND", "手部-手部间", "左手与右手之间"),
             ("HAND-CUSTOM", "手部-自定义拓展", "手部-自定义拓展"),
 
             ("FOREARM-TORSO", "小臂-躯干", "小臂-躯干"),
-            ("FOREARM-LOWER_LIMBS", "小臂-下肢", "小臂-下肢"),
-            ("FOREARM-HEAD", "小臂-头部", "小臂-头部"),
             ("FOREARM-BREAST", "小臂-胸部", "小臂-胸部"),
+            ("FOREARM-HEAD", "小臂-头部", "小臂-头部"),
+            ("FOREARM-LOWER_LIMBS", "小臂-下肢", "小臂-下肢"),
             # 同一部件的左右互检：左小臂 vs 右小臂
             ("FOREARM-FOREARM", "小臂-小臂间", "左小臂与右小臂之间"),
             ("FOREARM-CUSTOM", "小臂-自定义拓展", "小臂-自定义拓展"),
 
             ("UPPER_ARM-TORSO", "大臂-躯干", "大臂-躯干"),
-            ("UPPER_ARM-LOWER_LIMBS", "大臂-下肢", "大臂-下肢"),
-            ("UPPER_ARM-HEAD", "大臂-头部", "大臂-头部"),
             ("UPPER_ARM-BREAST", "大臂-胸部", "大臂-胸部"),
+            ("UPPER_ARM-HEAD", "大臂-头部", "大臂-头部"),
+            ("UPPER_ARM-LOWER_LIMBS", "大臂-下肢", "大臂-下肢"),
             ("UPPER_ARM-CUSTOM", "大臂-自定义拓展", "大臂-自定义拓展"),
         ],
         options={'ENUM_FLAG'},
