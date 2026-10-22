@@ -51,6 +51,10 @@ PART_VGS = OrderedDict({
     ],
 })
 
+# 胸部（BREAST）的判定阈值比其它部件宽松得多：
+# 只要一个顶点在胸部骨骼上的权重之和超过 0.01，就算胸部
+BREAST_WEIGHT_THRESHOLD = 0.01
+
 # 大臂被「腕捩」再分段时，'腕' 与这些捩骨骼共存，需要把 '腕' 从大臂部件里去掉
 UPPER_ARM_TWIST_VGS = {
     '腕.L': ('腕捩.L', '腕捩1.L', '腕捩2.L', '腕捩3.L'),
@@ -491,7 +495,11 @@ class ClippingDetectionOperator(bpy.types.Operator):
         remove_redundant_upper_arm_vgs(part_vgs, {vg.name for vg in self.tmp_obj.vertex_groups})
         # 上半身被拆成多段（上半身2、上半身3等）时，把「首」到「上半身」的骨骼补进 TORSO
         add_spine_bones_to_torso(part_vgs, self.armature)
-        part_vgs["BREAST"] = [bb.name for bb in get_breast_bones(self.armature)]
+        # 胸部放到 part_vgs 的最前面
+        part_vgs = OrderedDict(
+            [("BREAST", [bb.name for bb in get_breast_bones(self.armature)])]
+            + list(part_vgs.items())
+        )
         # 自定义拓展：把额外指定的骨骼（顶点组）当作独立部件 CUSTOM 参与检测
         custom_vgs = split_names(self.props.custom_bones_str)
         if custom_vgs:
@@ -500,7 +508,8 @@ class ClippingDetectionOperator(bpy.types.Operator):
         # 临时骨架判断「哪些骨骼有用」时要用这份定义
         self.part_vgs = part_vgs
 
-        part_vertices = classify_vertices(self.tmp_obj, part_vgs)
+        part_vertices = classify_vertices(
+            self.tmp_obj, part_vgs, thresholds={"BREAST": BREAST_WEIGHT_THRESHOLD})
 
         # 手部、小臂再按左右拆成两块：
         # 罩体需要以「对应那只手」作为 Shrinkwrap 目标，
@@ -1073,16 +1082,22 @@ def create_tmp_obj(context, objects, tmp_col):
 
 
 @timeit
-def classify_vertices(obj, part_vgs, threshold=0.25):
+def classify_vertices(obj, part_vgs, threshold=0.25, thresholds=None):
     """
     按顶点组权重把顶点归类到身体部件
 
     规则：把一个顶点在「同一部件内的所有顶点组」上的权重加起来，
-    取第一个（按 part_vgs 顺序）总和超过 threshold 的部件。
+    取第一个（按 part_vgs 顺序）总和超过阈值的部件。
     每个顶点最多归入一个部件。
+
+    thresholds 可以给个别部件单独指定阈值（例如胸部只要 > 0.01 就算），
+    没列出来的部件仍用 threshold。
     """
+    thresholds = thresholds or {}
     part_names = list(part_vgs.keys())
     part_count = len(part_names)
+    # 每个部件的阈值，顺序和 part_names 一致，循环里直接按下标取
+    part_thresholds = [thresholds.get(part, threshold) for part in part_names]
 
     # 顶点组名称 -> 顶点组索引（顶点组索引是从 0 开始的连续整数）
     vertex_groups = {
@@ -1114,7 +1129,7 @@ def classify_vertices(obj, part_vgs, threshold=0.25):
                 weights[part_index] += element.weight
 
         for part_index in range(part_count):
-            if weights[part_index] > threshold:
+            if weights[part_index] > part_thresholds[part_index]:
                 append_to_part[part_index](vertex_index)
                 break
 
