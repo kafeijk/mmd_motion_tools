@@ -649,6 +649,10 @@ class ClippingDetectionOperator(bpy.types.Operator):
         source_props = source.mmd_motion_tools_detect_clipping
         target_props = target.mmd_motion_tools_detect_clipping
 
+        # detection_preset 的 update 会重设代理精度、手部罩体和检测范围，
+        # 所以必须先写它，再用原场景的值覆盖这些被预设改写的参数。
+        target_props.detection_preset = source_props.detection_preset
+
         target_props.proxy_accuracy = source_props.proxy_accuracy
         target_props.show_detection_range = source_props.show_detection_range
         target_props.remove_tmp = source_props.remove_tmp
