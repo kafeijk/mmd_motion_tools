@@ -79,7 +79,6 @@ def apply_detection_preset(props):
 
     props.proxy_accuracy = preset["proxy_accuracy"]
     props.use_hand_sphere = preset["use_hand_sphere"]
-    props.remove_tmp = preset["remove_tmp"]
 
     if detection_range == "DEFAULT":
         # 和属性定义里的默认值完全一致（那份列表就是素体要用的检测范围）
