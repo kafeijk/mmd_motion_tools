@@ -58,6 +58,39 @@ def keep_detection_range(props):
     props.detection_range = fallback
 
 
+# 「检测预设」里每个预设对应的参数组合
+DETECTION_PRESETS = {
+    "GENERAL": {
+        "proxy_accuracy": 'BALANCED',
+        "use_hand_sphere": False,
+        "remove_tmp": True,
+        "detection_range": ("HAND-BREAST", "FOREARM-BREAST"),
+    },
+    "BODY": {
+        "proxy_accuracy": 'FULL',
+        "use_hand_sphere": True,
+        "remove_tmp": True,
+        "detection_range": "DEFAULT",
+    },
+}
+
+
+def apply_detection_preset(props):
+    preset = DETECTION_PRESETS.get(props.detection_preset, DETECTION_PRESETS["GENERAL"])
+    detection_range = preset["detection_range"]
+
+    props.proxy_accuracy = preset["proxy_accuracy"]
+    props.use_hand_sphere = preset["use_hand_sphere"]
+    props.remove_tmp = preset["remove_tmp"]
+
+    if detection_range == "DEFAULT":
+        # 和属性定义里的默认值完全一致（那份列表就是素体要用的检测范围）
+        props.detection_range = set(
+            props.bl_rna.properties["detection_range"].default_flag)
+    else:
+        props.detection_range = set(detection_range)
+
+
 class ClippingRangeItem(bpy.types.PropertyGroup):
     """结果列表里的一项：一段连续的穿模帧区间"""
     start: bpy.props.IntProperty(name="起始帧")
@@ -76,6 +109,19 @@ class ClippingFrameHit(bpy.types.PropertyGroup):
 
 
 class ClippingDetectionProperty(bpy.types.PropertyGroup):
+
+    # 检测预设：一键套用一组常用设置（代理精度 / 手部罩体 / 检测范围等）
+    detection_preset: bpy.props.EnumProperty(
+        name="检测预设",
+        description="一键套用一组常用设置",
+        items=[
+            ("GENERAL", "通用", "适用于多数MMD模型"),
+            ("BODY", "素体", "适用于素体类MMD模型"),
+        ],
+        default="GENERAL",
+        update=lambda self, context: apply_detection_preset(self),
+    )
+
     proxy_accuracy: bpy.props.EnumProperty(
         name="代理精度",
         description="代理网格的精度比例",

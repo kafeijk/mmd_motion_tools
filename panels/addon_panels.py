@@ -162,7 +162,20 @@ class ClippingDetection_PT_Panel(bpy.types.Panel):
         if not scene.use_preview_range:
             sub.prop(scene, "frame_start", text="时间范围")
             sub.prop(scene, "frame_end", text="")
-        col.prop(props, "proxy_accuracy")
+
+        # 「检测预设」和「代理精度」并排一行：左边标签按 40% 分栏、右对齐，
+        # 和「自定义拓展」「代理精度」等其它参数的标签落在同一条线上；
+        preset_row = col.row(align=True)
+        preset_row.use_property_split = False
+        preset_split = preset_row.split(factor=0.4, align=True)
+
+        preset_label = preset_split.row()
+        preset_label.alignment = 'RIGHT'
+        preset_label.label(text="检测预设")
+
+        preset_value = preset_split.row(align=True)
+        preset_value.prop(props, "detection_preset", text="")
+        preset_value.prop(props, "proxy_accuracy", text="")
         col.prop(props, "use_hand_sphere")
 
         range_toggle_row = col.row(align=True)
