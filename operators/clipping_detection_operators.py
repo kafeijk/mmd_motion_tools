@@ -164,6 +164,14 @@ def build_detection_pairs(part_objs, detection_range):
 SPINE_NECK_BONE_NAME = '首'
 SPINE_ROOT_BONE_NAME = '上半身'
 
+# 脚部根骨：这些骨骼下面的子孙（脚趾之类）都算下肢，分类时补进 LOWER_LIMBS
+FOOT_ROOT_BONES = (
+    '足首.L', 'つま先.L',
+    '足首.R', 'つま先.R',
+    '足首D.L', '足先EX.L',
+    '足首D.R', '足先EX.R',
+)
+
 TMP_ANALYSIS_COLLECTION_NAME = "穿模检测临时集合"
 
 # 临时对象的标记属性
@@ -257,6 +265,39 @@ def add_spine_bones_to_torso(part_vgs, armature):
     for name in get_spine_bone_names(armature):
         if name not in torso:
             torso.append(name)
+
+
+def get_foot_descendant_bone_names(armature):
+    """取脚部根骨下面的所有子孙骨骼名（脚趾之类）"""
+    bones = armature.data.bones
+    names = []
+    collected = set()
+
+    def collect_children(bone):
+        for child in bone.children:
+            if child.name in collected or is_dummy_bone(child.name):
+                continue
+            collected.add(child.name)
+            names.append(child.name)
+            collect_children(child)
+
+    for root_name in FOOT_ROOT_BONES:
+        root = bones.get(root_name)
+        if root is not None:
+            collect_children(root)
+
+    return names
+
+
+def add_foot_bones_to_lower_limbs(part_vgs, armature):
+    """把脚部根骨下面的子孙骨骼（脚趾等）补进 LOWER_LIMBS，已有的不重复加"""
+    lower_limbs = part_vgs.get("LOWER_LIMBS")
+    if not lower_limbs:
+        return
+
+    for name in get_foot_descendant_bone_names(armature):
+        if name not in lower_limbs:
+            lower_limbs.append(name)
 
 
 def clear_previous_temp_objects():
@@ -509,6 +550,8 @@ class ClippingDetectionOperator(bpy.types.Operator):
         remove_redundant_upper_arm_vgs(part_vgs, {vg.name for vg in self.tmp_obj.vertex_groups})
         # 上半身被拆成多段（上半身2、上半身3等）时，把「首」到「上半身」的骨骼补进 TORSO
         add_spine_bones_to_torso(part_vgs, self.armature)
+        # 脚趾等挂在 足首 / つま先 / 足首D / 足先EX 下面的骨骼补进 LOWER_LIMBS
+        add_foot_bones_to_lower_limbs(part_vgs, self.armature)
         # 胸部放到 part_vgs 的最前面
         part_vgs = OrderedDict(
             [("BREAST", [bb.name for bb in get_breast_bones(self.armature)])]
