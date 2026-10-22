@@ -351,9 +351,8 @@ class ClippingDetectionOperator(bpy.types.Operator):
 
         # 运行期状态
         self.generator = None
+        # 已经报过的进度百分比（0~100），step_detection 靠它算下一个 1% 落在第几帧
         self.percent = -1
-        # 每 1% 对应的帧数，start_detection 里按帧范围算
-        self.frames_per_percent = 1
         self.merged = {}
         self.frame_hits = {}
         self.tmp_col = None
@@ -371,6 +370,8 @@ class ClippingDetectionOperator(bpy.types.Operator):
         self.tmp_scene = None
         self.timer = None
         self.flush_count = 0
+        # 进度更新后是否还要多留一轮 TIMER 让界面把它画出来
+        self.hold_progress = False
         # 进入临时场景前的着色方式（area 指针 -> 'SOLID'/'MATERIAL'/...）
         self.shading_before = {}
 
@@ -423,9 +424,18 @@ class ClippingDetectionOperator(bpy.types.Operator):
             tag_redraw(context)
             return {'RUNNING_MODAL'}
 
+        # 每个百分比多留一轮 TIMER 再继续：只留一轮时，两次进度更新有可能被合并进
+        # 同一次界面重绘，看起来就像跳了一格（0、1、3 / 0、2、4）。
+        # 多等一轮只多花一个 TIMER 间隔（10ms 量级），肉眼看不出来
+        if self.hold_progress:
+            self.hold_progress = False
+            tag_redraw(context)
+            return {'RUNNING_MODAL'}
+
         try:
             if not self.step(context):
                 tag_redraw(context)
+                self.hold_progress = True
                 return {'RUNNING_MODAL'}
             self.finish(context)
         except Exception as error:
@@ -540,8 +550,6 @@ class ClippingDetectionOperator(bpy.types.Operator):
         frame_start = self.original_scene.frame_start
         frame_end = self.original_scene.frame_end
         self.total_frames = frame_end - frame_start + 1
-        # 每 1% 对应多少帧（至少 1 帧），后面用取模判断什么时候刷新进度
-        self.frames_per_percent = max(self.total_frames // 100, 1)
 
         # 新建空白场景，避免 Dependency graph 计算
         bpy.ops.scene.new(type='NEW')
@@ -615,24 +623,47 @@ class ClippingDetectionOperator(bpy.types.Operator):
 
             processed += 1
 
-            # 取模判断：走到「1% 的整数倍」或最后一帧才交还控制权刷新进度，
-            # 其余帧继续埋头干，免得每帧都来回切一次
-            if index % self.frames_per_percent and index != total:
-                # 兜底：单帧再慢也不能一直占着主线程
-                if processed >= MAX_FRAMES_PER_STEP:
-                    return False
-                continue
+            if total >= 100:
+                # 帧数够多（≥100 帧）时按整数百分比推进：每涨 1% 交还一次控制权，
+                # 中间那些帧继续埋头干，免得每帧都来回切一次界面。
+                if self.percent >= 100:
+                    # 已经报过 100% 了，剩下的几帧（不足 1%）不用再更新进度
+                    continue
 
-            percent = round(index / total * 100)
-            if percent == self.percent:
-                continue
+                # ── 下一个 1% 落在第几帧 ──────────────────────────────────
+                # 取「第 p 个百分比」对应的帧号：p * total / 100，再向上取整。
+                # 整数运算就是 (p * total + 99) // 100（+99 相当于向上取整）。
+                # 这里的 p 是「想报出的下一个百分比」，也就是 self.percent + 1。
+                #
+                # 例：total = 1001 帧（0~1000）
+                #   p=1   → (1*1001 + 99) // 100   = 11    → 第 11 帧报 1%
+                #   p=2   → (2*1001 + 99) // 100   = 21    → 第 21 帧报 2%
+                #   p=3   → (3*1001 + 99) // 100   = 31    → 第 31 帧报 3%
+                #   p=50  → (50*1001 + 99) // 100  = 501   → 第 501 帧报 50%
+                #   p=99  → (99*1001 + 99) // 100  = 991
+                #   p=100 → (100*1001 + 99) // 100 = 1001  → 最后一帧正好是 100%
+                threshold = ((self.percent + 1) * total + 99) // 100
 
-            self.percent = percent
-            # 进度条只反映检测进度：已完成帧数占总帧数的比例，初始化不占份额
-            set_detection_progress(
-                True,
-                percent / 100,
-                f"检测中 {percent}%（{index}/{total} 帧）")
+                # 还没走到这个边界：继续处理下一帧（不交还控制权）。
+                # 只有走到最后一帧才强制更新一次，保证进度条能收在 total/total。
+                if index < threshold and index != total:
+                    # 兜底：单帧再慢也不能一直占着主线程
+                    if processed >= MAX_FRAMES_PER_STEP:
+                        return False
+                    continue
+
+                # 到了边界：百分比 +1（最多 100），把进度交给界面
+                self.percent = min(self.percent + 1, 100)
+                set_detection_progress(
+                    True, self.percent / 100,
+                    f"检测中 {self.percent}%（{index}/{total} 帧）")
+            else:
+                # 帧数不足 100 时一帧就跨过 1% 以上（比如 60 帧，1 帧 ≈ 1.67%），
+                # 整数百分比必然跳号（2、3、5、7…），所以每帧都刷新、多给一位小数
+                set_detection_progress(
+                    True,
+                    index / total,
+                    f"检测中 {index / total * 100:.1f}%（{index}/{total} 帧）")
             return False
 
     def write_results(self):
