@@ -1172,7 +1172,6 @@ def repoint_armature_modifiers(mesh_objects, armature):
                 modifier.object = armature
 
 
-@timeit
 def create_tmp_obj(context, objects, tmp_col):
     copied_objs = []
     for obj in objects:
@@ -1202,7 +1201,6 @@ def create_tmp_obj(context, objects, tmp_col):
     return tmp_obj
 
 
-@timeit
 def classify_vertices(obj, part_vgs, threshold=0.25, thresholds=None):
     """
     按顶点组权重把顶点归类到身体部件
@@ -1257,7 +1255,6 @@ def classify_vertices(obj, part_vgs, threshold=0.25, thresholds=None):
     return part_vertices
 
 
-@timeit
 def create_part_meshes(props, obj, part_vertices, col, sphere_parts=(), sphere_col=None):
     """
     把临时网格按身体部件拆成多个代理网格
@@ -1480,7 +1477,6 @@ def create_part_meshes(props, obj, part_vertices, col, sphere_parts=(), sphere_c
     return part_objs
 
 
-@timeit
 def remove_part_meshes(tmp_col, tmp_objs=None, remove_empty_collection=False):
     """删除穿模检测用的临时网格对象"""
     targets = []
@@ -1553,7 +1549,6 @@ def remove_part_meshes(tmp_col, tmp_objs=None, remove_empty_collection=False):
         bpy.data.collections.remove(tmp_col)
 
 
-@timeit
 def purge_temp_datablocks(mesh_pointers_before=None, key_pointers_before=None):
     """
     清掉检测过程中新产生、但已经没人在用的网格和形态键数据块
@@ -1739,7 +1734,6 @@ def merge_frame_hits(frame_hits, merge_on_type_change=True):
     return merged
 
 
-@timeit
 def detect_collisions_between_objects(pairs, start, end, merge_on_type_change=True, pair_names=None,
                                       hand_spheres=None):
     """同步跑完整个检测，返回 (merged, frame_hits)；分片执行请用 iter_detect_collisions"""

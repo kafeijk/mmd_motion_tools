@@ -326,7 +326,6 @@ def get_vmd_bones(filepath):
     return list(vmd_file.boneAnimation.keys())
 
 
-@timeit
 def import_vmd_physics(armature, filepath, physical_bones, scale=0.08, margin=0):
     """
     把 VMD 中物理骨骼的关键帧直接写入当前活动骨架的 Action。
@@ -424,7 +423,6 @@ def remove_action(action):
         pass
 
 
-@timeit
 def copy_bone_fcurves(src_action, dst_action, bone_names):
     """将指定骨骼的动画从源 Action 完整覆盖到目标 Action。"""
 
