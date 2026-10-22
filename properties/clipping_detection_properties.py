@@ -113,7 +113,7 @@ class ClippingDetectionProperty(bpy.types.PropertyGroup):
     # name 为空就不会多出那一行（description 照旧作为悬浮提示）
     detection_preset: bpy.props.EnumProperty(
         name="",
-        description="一键套用一组常用设置",
+        description="穿模检测参数预设",
         items=[
             ("GENERAL", "通用", "适用于多数MMD模型"),
             ("BODY", "素体", "适用于素体类MMD模型"),
@@ -189,34 +189,30 @@ class ClippingDetectionProperty(bpy.types.PropertyGroup):
     # 自定义拓展：把额外的骨骼（顶点组）当作独立部件 CUSTOM 参与检测，
     custom_bones_str: bpy.props.StringProperty(
         name="自定义拓展",
-        description="通过额外的骨骼名称，扩展检测范围中的「自定义拓展」部件\n"
+        description="通过指定额外骨骼名称，扩展网格的检测范围，例如裙子等部位。\n"
                     "在此处输入骨骼名称，并以中文逗号或英文逗号作为分隔",
         default="",
         update=lambda self, context: sync_custom_detection_range(self),
     )
 
-    # 是否在面板上显示「检测范围」
+    # 是否在面板上显示「检测项目」
     show_detection_range: bpy.props.BoolProperty(
-        name="显示检测范围",
-        description="显示检测范围选项",
+        name="显示检测项目",
+        description="显示检测项目选项",
         default=False,
     )
 
     # 检测结束后是否删掉临时生成的部件代理网格
     remove_tmp: bpy.props.BoolProperty(
         name="删除临时对象",
-        description="检测结束后删除临时生成的部件代理网格\n"
-                    "不勾选时，代理网格将保留在「穿模检测临时集合」中，并在下次执行检测时自动清理",
+        description="检测结束后删除临时生成的代理网格",
         default=True
     )
 
-    # 是否生成手部罩体，并把它和手部一起当作「真正的手」参与检测
+    # 是否生成手部罩体，并把它和手部一起当作「真正的手」参与检测（罩体不属于临时对象）
     use_hand_sphere: bpy.props.BoolProperty(
         name="手部罩体",
-        description="在左右手各生成一个罩体包裹手部，并以罩体代替手部参与穿模检测\n"
-                    "罩体及其缩裹用的手部代理网格存放在「罩体」集合中，其中代理网格默认隐藏\n"
-                    "检测结束后它们会挂回原骨架，且不会被「删除临时对象」选项清理，"
-                    "但每次执行检测时都会重新生成",
+        description="在左右手各生成一个罩体包裹手部，并以罩体代替手部参与穿模检测",
         default=False,
     )
 
