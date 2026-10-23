@@ -354,6 +354,20 @@ def clear_previous_temp_objects():
             remove_part_meshes(collection, remove_empty_collection=True)
 
 
+def is_mesh_visible_for_detection(mesh_obj):
+    """
+    网格是否参与检测：视图可见，且骨架修改器没有全部被禁用
+
+    骨架修改器被禁用（show_viewport=False）时网格不会跟随动作，
+    效果和网格被隐藏一样，所以按隐藏处理，走同一套提示。
+    完全没有骨架修改器的网格仍按可见算，交给后面的「网格未绑定骨架修改器」提示。
+    """
+    if not is_visible_in_viewport(mesh_obj):
+        return False
+    armature_modifiers = [modifier for modifier in mesh_obj.modifiers if modifier.type == 'ARMATURE']
+    return not armature_modifiers or any(modifier.show_viewport for modifier in armature_modifiers)
+
+
 class ClippingDetectionOperator(bpy.types.Operator):
     bl_idname = "mmd_motion_tools.detect_clipping"
     bl_label = "执行"
@@ -387,7 +401,8 @@ class ClippingDetectionOperator(bpy.types.Operator):
 
         pmx_objects = find_pmx_objects(armature)
         # 只有在视图里真正显示出来的网格才参与检测，部分素体类模型可能含有默认服装，直接让用户删除的话不太合理。
-        objects = [pmx_object for pmx_object in pmx_objects if is_visible_in_viewport(pmx_object)]
+        # 骨架修改器被禁用时网格不跟随动作，等同于被隐藏，同样不参与检测。
+        objects = [pmx_object for pmx_object in pmx_objects if is_mesh_visible_for_detection(pmx_object)]
         if not objects:
             if pmx_objects:
                 self.report({'ERROR'}, '请确保网格在3D视图中可见！')
