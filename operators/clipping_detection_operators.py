@@ -881,8 +881,8 @@ class ClearClippingOperator(bpy.types.Operator):
 
 class ShowClippingTypeOperator(bpy.types.Operator):
     bl_idname = "mmd_motion_tools.show_clipping_type"
-    bl_label = "查看穿模类型"
-    bl_description = "显示当前帧的穿模类型"
+    bl_label = "查看穿模位置"
+    bl_description = "在状态栏显示当前帧的穿模位置"
     bl_options = {'INTERNAL'}
 
     frame: bpy.props.IntProperty()
@@ -896,7 +896,7 @@ class ShowClippingTypeOperator(bpy.types.Operator):
             return {'CANCELLED'}
 
         # 状态栏 / 信息编辑器里提示，比弹窗轻，也不占额外交互
-        self.report({'INFO'}, f"穿模类型：" + "、".join(labels))
+        self.report({'INFO'}, f"穿模位置：" + "、".join(labels))
         return {'FINISHED'}
 
 

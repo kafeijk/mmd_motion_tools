@@ -458,7 +458,7 @@ def draw_clipping_row(layout, props, item, frame):
         if icon_name not in icons:
             subrow.label(text="", icon="BLANK1")
         elif icon_name in hit_icons:
-            # 当前帧命中：图标变成按钮，点开后显示这一帧具体的穿模类型
+            # 当前帧命中：图标变成按钮，点开后显示这一帧具体的穿模位置
             op = subrow.operator(ShowClippingTypeOperator.bl_idname, text="", icon=icon_name)
             op.frame = frame
             op.types = ", ".join(hit_icons[icon_name])
