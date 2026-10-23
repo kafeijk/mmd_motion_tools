@@ -320,7 +320,7 @@ def clear_previous_temp_objects():
 class ClippingDetectionOperator(bpy.types.Operator):
     bl_idname = "mmd_motion_tools.detect_clipping"
     bl_label = "执行"
-    bl_description = "检测网格对象之间的穿模情况"
+    bl_description = "检测网格之间的穿模情况\n与检测无关的网格请提前隐藏"
     bl_options = {'REGISTER', 'UNDO'}
 
     def check_props(self, context):
