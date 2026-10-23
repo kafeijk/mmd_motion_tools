@@ -1447,8 +1447,14 @@ def create_part_meshes(props, obj, part_vertices, col, sphere_parts=(), sphere_c
     # ------------------------------------------------------------------
     # 6. 从「活动对象」复制修改器到「所有选中对象」，然后删掉临时网格
     # ------------------------------------------------------------------
-    select_only_objects(bpy.context, list(part_objs.values()) + [obj])
-    bpy.ops.object.modifier_copy_to_selected(modifier="mmd_armature")
+    # 修改器名字各版本 mmd_tools 不一致（4.x 叫 mmd_armature，3.6 叫
+    # mmd_bone_order_override），所以按类型找，不能写死名字，否则 3.6 下
+    # 复制会静默失败，代理网格不动，检测结果永远是 0 命中。
+    armature_modifier = next(
+        (modifier for modifier in obj.modifiers if modifier.type == 'ARMATURE'), None)
+    if armature_modifier is not None:
+        select_only_objects(bpy.context, list(part_objs.values()) + [obj])
+        bpy.ops.object.modifier_copy_to_selected(modifier=armature_modifier.name)
 
     bpy.data.objects.remove(obj, do_unlink=True)
 
@@ -1520,9 +1526,9 @@ def remove_part_meshes(tmp_col, tmp_objs=None, remove_empty_collection=False):
         for _obj, data in doomed:
             if data is None or data.users != 0:
                 continue
-            if data.id_type == 'MESH':
+            if isinstance(data, bpy.types.Mesh):
                 bpy.data.meshes.remove(data)
-            elif data.id_type == 'ARMATURE':
+            elif isinstance(data, bpy.types.Armature):
                 bpy.data.armatures.remove(data)
 
         for action in doomed_actions:
