@@ -218,23 +218,60 @@ def tag_redraw(context):
         if area.type == 'VIEW_3D':
             area.tag_redraw()
 
-
-def remove_redundant_upper_arm_vgs(part_vgs, vertex_group_names):
+def remove_redundant_upper_arm_vgs(part_vgs, mesh_obj):
     """
-    大臂部件里有 '腕.L' 且同时有任意一个「腕捩」时，把 '腕.L' 去掉（右臂同理，左右各判各的）
+    大臂部件里有 '腕.L' 且同时有「腕捩」权重时，把 '腕.L' 去掉（右臂同理，左右各判各的）
 
     对于包含次标准骨骼的大多数模型，这样可以减少肩部对检测结果的干扰。
-    对于不包含次标准骨骼的模型，则不做额外适配，由用户自行从检测范围中移除大臂相关项。
+
+    只认真正带权重的「腕捩」顶点组：有些模型建了腕捩顶点组但权重全为 0，
+    这种情况必须保留 '腕.L'，否则大臂一个顶点都分不到，代理网格根本建不出来。
+
+    性能上只遍历一次顶点，并且只关心「腕捩」相关的几个顶点组：
+    左右两侧都确认有权重后立刻退出，不会扫完整个网格。
     """
     vgs = part_vgs.get("UPPER_ARM")
     if not vgs:
+        # 该模型没有配置大臂部件（或大臂列表为空），不需要处理
         return
 
+    # 顶点组名 -> 索引。只建一次，后面全部按下标做整数比较
+    group_index = {vertex_group.name: vertex_group.index for vertex_group in mesh_obj.vertex_groups}
+
+    # 模型没有 '腕.L' 时（例如用 Wrist_L 命名的非标准模型），
+    # 后面即使扫描也删不掉任何东西，直接跳过整轮顶点遍历
+    if not any(name in group_index for name in UPPER_ARM_TWIST_VGS):
+        return
+
+    # 顶点组索引 -> 所属大臂名（'腕.L' 或 '腕.R'）。
+    # 只收「腕捩」分段：'腕捩.L'、'腕捩1.L' … 都映射到 '腕.L'
+    twist_group_to_side = {}
     for arm_name, twist_names in UPPER_ARM_TWIST_VGS.items():
-        if arm_name not in vertex_group_names:
-            continue
-        if any(name in vertex_group_names for name in twist_names):
-            vgs.remove(arm_name)
+        for name in twist_names:
+            index = group_index.get(name)
+            if index is not None:
+                twist_group_to_side[index] = arm_name
+    if not twist_group_to_side:
+        # 模型一个大臂的「腕捩」组都没有，说明只是普通 '腕' 蒙皮，没有冗余项
+        return
+
+    # 单次遍历所有顶点，只检查「腕捩」这几个组：
+    # 先用集合判断索引（C 层查找，比逐次字典 get 便宜），命中后才读权重
+    twist_indices = set(twist_group_to_side)
+    side_count = len(set(twist_group_to_side.values()))  # 需要确认的大臂数量：通常为 2
+    weighted_sides = set()  # 已确认「至少有一个顶点权重大于 0」的大臂
+    for vertex in mesh_obj.data.vertices:
+        for element in vertex.groups:
+            group = element.group
+            if group in twist_indices and element.weight > 0.0:
+                weighted_sides.add(twist_group_to_side[group])
+        # 左右两侧都确认过了，后面的顶点不可能再提供新信息，提前结束
+        if len(weighted_sides) >= side_count:
+            break
+
+    # 只剔除「确实有腕捩权重」的那一侧的 '腕'，另一侧保持原样
+    for arm_name in weighted_sides:
+        vgs.remove(arm_name)
 
 
 def get_spine_bone_names(armature):
@@ -553,8 +590,8 @@ class ClippingDetectionOperator(bpy.types.Operator):
     def create_part_objects(self):
         """按顶点组划分身体部件，生成各部件代理网格，返回 {部件: 代理网格}"""
         part_vgs = copy.deepcopy(PART_VGS)
-        # 大臂有「腕捩」分段时，'腕' 和分段重复，从大臂部件里去掉
-        remove_redundant_upper_arm_vgs(part_vgs, {vg.name for vg in self.tmp_obj.vertex_groups})
+        # 大臂有「腕捩」分段且真的带权重时，'腕' 和分段重复，从大臂部件里去掉
+        remove_redundant_upper_arm_vgs(part_vgs, self.tmp_obj)
         # 上半身被拆成多段（上半身2、上半身3等）时，把「首」到「上半身」的骨骼补进 TORSO
         add_spine_bones_to_torso(part_vgs, self.armature)
         # 脚趾等挂在 足首 / つま先 / 足首D / 足先EX 下面的骨骼补进 LOWER_LIMBS
