@@ -26,9 +26,10 @@ class ToolsPanel(bpy.types.Panel):
         layout.use_property_decorate = False
         col = layout.column()
 
-        row = col.row(align=True)
-        split = row.split(factor=0.5, align=True)
-        try:
+        if is_mmd_tools_enabled():
+            row = col.row(align=True)
+            split = row.split(factor=0.5, align=True)
+
             left = split.row(align=True)
             left.operator("mmd_tools.import_model", text="模型导入", icon="OUTLINER_OB_ARMATURE")
 
@@ -41,8 +42,6 @@ class ToolsPanel(bpy.types.Panel):
                 right_setup.enabled = True
             else:
                 right_setup.enabled = False
-        except Exception:
-            pass
 
         row = col.row(align=True)
         split = row.split(factor=0.5, align=True)
@@ -51,12 +50,10 @@ class ToolsPanel(bpy.types.Panel):
         right = split.row(align=True)
         right.operator(FlipPoseOperator.bl_idname, text=FlipPoseOperator.bl_label, icon="ARROW_LEFTRIGHT")
 
-        try:
+        if is_mmd_tools_enabled():
             row = col.row(align=True)
             row.operator("mmd_tools.import_vmd", text="动作导入", icon='ANIM')
             row.operator("mmd_tools.export_vmd", text="动作导出", icon='ANIM')
-        except Exception:
-            pass
 
         row = col.row(align=True)
         row.operator(ImportVmdPhysicsOperator.bl_idname, text=ImportVmdPhysicsOperator.bl_label, icon='ADD')
@@ -300,6 +297,9 @@ class CameraMotionFixer_PT_Panel(bpy.types.Panel):
 
         layout = self.layout
         layout.use_property_split = True
+
+        if not is_mmd_tools_enabled():
+            return
 
         try:
             mmd_camera_root = find_mmd_camera_root(obj)
