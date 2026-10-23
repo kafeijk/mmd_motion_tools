@@ -12,7 +12,7 @@ bl_info = {
     "name": "MMD Motion Tools",
     "author": "来杯咖啡再说",
     "blender": (3, 2, 0),
-    "version": (1, 0, 0),
+    "version": (1, 1, 0),
     "description": "Addon for editing animation",
     "category": "3D View"
 }
