@@ -511,7 +511,8 @@ def ensure_action(obj, action_name=None):
 
 def find_pmx_root():
     """寻找pmx对应空物体"""
-    return next((obj for obj in bpy.context.scene.objects if obj.mmd_type == 'ROOT'), None)
+    # mmd_tools 被关闭后 Object.mmd_type 属性会被反注册，用 getattr 兜底避免 AttributeError
+    return next((obj for obj in bpy.context.scene.objects if getattr(obj, 'mmd_type', None) == 'ROOT'), None)
 
 
 def find_pmx_root_with_child(child):
@@ -521,7 +522,7 @@ def find_pmx_root_with_child(child):
 
     parent = child
     while parent:
-        if parent.mmd_type == 'ROOT':
+        if getattr(parent, 'mmd_type', None) == 'ROOT':
             return parent
         parent = parent.parent
 
@@ -533,7 +534,8 @@ def find_pmx_armature(pmx_root):
 
 
 def find_pmx_objects(pmx_armature):
-    return list((child for child in pmx_armature.children if child.type == 'MESH' and child.mmd_type == 'NONE'))
+    return list((child for child in pmx_armature.children
+                 if child.type == 'MESH' and getattr(child, 'mmd_type', None) == 'NONE'))
 
 
 def is_visible_in_viewport(obj, view_layer=None):
@@ -893,7 +895,9 @@ def is_mmd_tools_enabled():
     """
     for mod in addon_utils.modules():
         if mod.__name__.split(".")[-1] == "mmd_tools":
-            return addon_utils.check(mod.__name__)[0]
+            # addon_utils.disable() 关闭 4.5/5.x 扩展后，addon_utils.check() 仍可能返回已启用，
+            # 但 Object.mmd_type 等属性其实已被反注册；以属性是否注册为准，避免守卫放行后抛 AttributeError
+            return addon_utils.check(mod.__name__)[0] and hasattr(bpy.types.Object, "mmd_type")
 
     return False
 
