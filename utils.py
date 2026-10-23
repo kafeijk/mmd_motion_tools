@@ -8,6 +8,11 @@ import addon_utils
 import bpy
 from mathutils import Quaternion, Vector, Euler
 
+# MMD 默认的贝塞尔控制点（20/127、107/127）：两点都落在弦上，曲线即为直线
+STRAIGHT_HANDLE_START = 20 / 127
+STRAIGHT_HANDLE_END = 107 / 127
+
+
 # -------------------------------------------------------------
 # 特定用途骨骼
 # -------------------------------------------------------------
@@ -43,6 +48,17 @@ BONE_PATH_PREFIX = 'pose.bones["'
 
 # 骨架对象上保存骨骼原始显示/隐藏状态的自定义属性名
 ORIGINAL_BONE_HIDE_PROP = 'mmd_motion_tools_original_bone_hide'
+
+BREAST_BONE_PATTERN = re.compile(
+    r'^胸'  # 开头必须是“胸”
+    r'([_上下前後先間親亲変形回転支え基W筋]*)'
+    r'([0-9０-９])?'  # 可选的单独数字（半角或全角）
+    r'([錘先D])?'
+    r'(\.\d{3})?'  # 可选的前置序号
+    r'(\.[LR])?'  # 可选的左右标识
+    r'(\.\d{3})?'  # 可选的后置序号
+    r'$'
+)
 
 
 def timeit(func):
@@ -495,7 +511,8 @@ def ensure_action(obj, action_name=None):
 
 def find_pmx_root():
     """寻找pmx对应空物体"""
-    return next((obj for obj in bpy.context.scene.objects if obj.mmd_type == 'ROOT'), None)
+    # mmd_tools 被关闭后 Object.mmd_type 属性会被反注册，用 getattr 兜底避免 AttributeError
+    return next((obj for obj in bpy.context.scene.objects if getattr(obj, 'mmd_type', None) == 'ROOT'), None)
 
 
 def find_pmx_root_with_child(child):
@@ -505,7 +522,7 @@ def find_pmx_root_with_child(child):
 
     parent = child
     while parent:
-        if parent.mmd_type == 'ROOT':
+        if getattr(parent, 'mmd_type', None) == 'ROOT':
             return parent
         parent = parent.parent
 
@@ -517,7 +534,25 @@ def find_pmx_armature(pmx_root):
 
 
 def find_pmx_objects(pmx_armature):
-    return list((child for child in pmx_armature.children if child.type == 'MESH' and child.mmd_type == 'NONE'))
+    return list((child for child in pmx_armature.children
+                 if child.type == 'MESH' and getattr(child, 'mmd_type', None) == 'NONE'))
+
+
+def is_visible_in_viewport(obj, view_layer=None):
+    """
+    物体是否真的显示在当前视图里
+
+    visible_get() 一次覆盖所有「看不见」的情况：
+    https://docs.blender.org/api/current/bpy.types.Object.html#bpy.types.Object.visible_get
+    - 物体自己被隐藏（眼睛图标，hide_set）
+    - 物体自己被禁用（监视器图标，hide_viewport）
+    - 所在集合被隐藏或被禁用（集合本身、或它在视图层里的隐藏状态）
+    - 所在集合在视图层里被排除（exclude）
+    - 根本没链进场景 / 不在当前视图层
+
+    物体同时挂在多个集合上时，只要还有一个集合可见，就算可见。
+    """
+    return obj.visible_get(view_layer=view_layer)
 
 
 def find_rigid_body_parent(root):
@@ -853,16 +888,13 @@ def find_children(obj, obj_type=None):
 
 def is_mmd_tools_enabled():
     """
-    校验mmd_tools是否开启，addon.module分别为：
-    3.x版本 为 mmd_tools
-    4.2版本 临时为 bl_ext.user_default.mmd_tools
-    4.3版本及以后 bl_ext.blender_org.mmd_tools
-    """
-    for mod in addon_utils.modules():
-        if mod.__name__.split(".")[-1] == "mmd_tools":
-            return addon_utils.check(mod.__name__)[0]
+    校验mmd_tools是否开启
 
-    return False
+    直接看 Object.mmd_type 是否注册即可：它由 mmd_tools 注册，
+    注册了就说明插件可用；反注册了（含 addon_utils.disable() 半关闭）就不可用。
+    这样不用遍历 addon_utils.modules()，面板每次重绘都不会有额外开销。
+    """
+    return hasattr(bpy.types.Object, "mmd_type")
 
 
 def get_camera_value(obj, data_path, frame, array_index=None):
@@ -1121,6 +1153,12 @@ def apply_transform(obj, data_path, offset, frame_start, frame_end, current_valu
             if kp:
                 set_keyframe_value(kp, value[index])
 
+    # 改值后手柄只做了整体平移，绝对偏差留在原处；段两端的值一变，
+    # 旧偏差就可能落到值域之外，曲线会先减后增地冲出区间（抽搐）
+    modified = set(frame_keys)
+    for fc in fcurve_map.values():
+        clamp_handle_offsets(fc, modified)
+
     for fc in fcurve_map.values():
         fc.update()
 
@@ -1137,47 +1175,104 @@ def set_keyframe_value(kp, value):
     kp.handle_right.y += offset
 
 
+def clamp_handle_offsets(fc, frames):
+    """把手柄夹回所在段的值域内（只处理端点值变过的段）
+
+    贝塞尔手柄是绝对坐标，改值时只做整体平移，相对偏差原样保留。
+    段两端的值一旦变化，旧偏差就可能落到 [左键值, 右键值] 之外，
+    曲线于是先减后增（或先增后减）地冲出区间，看起来就是抽搐。
+    MMD 的控制点按段归一化（y1、y2 在 0~127），天生不会这样，这里补上同样的约束。
+    """
+    points = fc.keyframe_points
+    for i in range(len(points) - 1):
+        left_key, right_key = points[i], points[i + 1]
+        if int(left_key.co[0]) not in frames and int(right_key.co[0]) not in frames:
+            continue
+        low, high = sorted((left_key.co[1], right_key.co[1]))
+        for key, attr in ((left_key, "handle_right"), (right_key, "handle_left")):
+            handle = getattr(key, attr)
+            value = min(max(handle.y, low), high)
+            if abs(value - handle.y) > 1e-9:
+                handle.y = value
+                setattr(key, attr, handle)
+
+
 def remove_margin_keys(fcurves, frame_start, frame_end, margin, update=True):
     """删除范围边缘的关键帧"""
+    fcurves = list(fcurves)
     for fc in fcurves:
         fc.update()
 
     # 当前曲线最小关键帧
     min_frame = min(int(kp.co[0]) for fc in fcurves for kp in fc.keyframe_points)
 
+    spans = [
+        (frame_start - margin, frame_start),
+        (frame_end, frame_end + margin),
+    ]
+    # 每条曲线在这两个区间里「有没有真的删掉键」：删过的形状已经没意义，拉成直线
+    removed_flags = []
+
     for fc in fcurves:
+        flags = [False, False]
         for i in range(len(fc.keyframe_points) - 1, -1, -1):
             kp = fc.keyframe_points[i]
             frame = int(kp.co[0])
             if frame == min_frame:
                 continue
-            if frame_start - margin <= frame < frame_start or frame_end < frame <= frame_end + margin:
+            if frame_start - margin <= frame < frame_start:
                 fc.keyframe_points.remove(kp)
+                flags[0] = True
+            elif frame_end < frame <= frame_end + margin:
+                fc.keyframe_points.remove(kp)
+                flags[1] = True
+        removed_flags.append(flags)
 
     for fc in fcurves:
         fc.update()
 
-    # 差值方式改为平滑
-    for fc in fcurves:
-        smooth_key_transition(
-            fc,
-            [
-                (frame_start - margin, frame_start),
-                (frame_end, frame_end + margin),
-            ]
-        )
+    # 过渡统一成贝塞尔：该区间删过键的拉成共线直线，没删过的保持原有曲线
+    for fc, flags in zip(fcurves, removed_flags):
+        for span, removed in zip(spans, flags):
+            smooth_key_transition(fc, [span], straight=removed)
 
     # 刷新场景以更新视图
     if update:
         bpy.context.scene.frame_set(bpy.context.scene.frame_current)
 
 
-def smooth_key_transition(fc, frame_pairs):
-    """设置指定关键帧之间为线性过渡"""
+def smooth_key_transition(fc, frame_pairs, straight=False):
+    """
+    把指定关键帧之间的过渡统一成贝塞尔
+
+    straight=False：保持关键帧原有的控制杆，曲线形状不变
+    straight=True ：把控制点摆到弦上（MMD 默认的 20/127、107/127），
+                    控制点共线时贝塞尔数学上就是直线，看着像线性但类型仍是 BEZIER，
+                    之后想调形状直接拖手柄即可
+    """
     for left_frame, right_frame in frame_pairs:
-        left_key, _ = find_adjacent_keys(fc, left_frame, right_frame)
-        if left_key:
-            left_key.interpolation = 'LINEAR'
+        left_key, right_key = find_adjacent_keys(fc, left_frame, right_frame)
+        if not left_key:
+            continue
+
+        left_key.interpolation = 'BEZIER'
+
+        if not straight or right_key is None:
+            continue
+
+        delta = right_key.co - left_key.co
+        # co.x 帧数；co.y 值
+        if abs(delta.x) < 1e-6:
+            continue
+
+        # x、y 同乘一个系数：偏移量 = 弦向量 × 系数，控制点必落在两键连线上
+        left_key.handle_right_type = 'FREE'
+        left_key.handle_right = left_key.co + Vector((delta.x * STRAIGHT_HANDLE_START,
+                                                      delta.y * STRAIGHT_HANDLE_START))
+        # 四点共线时三次贝塞尔退化成线段
+        right_key.handle_left_type = 'FREE'
+        right_key.handle_left = left_key.co + Vector((delta.x * STRAIGHT_HANDLE_END,
+                                                      delta.y * STRAIGHT_HANDLE_END))
 
     fc.update()
 
@@ -1231,6 +1326,27 @@ def convertNameToLR(name, use_underscore=False):
     return name
 
 
+def split_names(names_str):
+    """
+    把「逗号分隔的名称」字符串拆成列表
+
+    支持中文逗号、英文逗号（可混用），自动去掉首尾空白与空项。
+    返回的列表保持输入顺序并已去重。
+    """
+    if not names_str:
+        return []
+
+    names = []
+    seen = set()
+    for name in re.split(r"[,，]+", names_str):
+        name = name.strip()
+        if name and name not in seen:
+            seen.add(name)
+            names.append(name)
+
+    return names
+
+
 def copy_obj(obj, col=None):
     new_mesh = obj.data.copy()
     new_obj = obj.copy()
@@ -1239,6 +1355,38 @@ def copy_obj(obj, col=None):
         col = obj.users_collection[0]
     col.objects.link(new_obj)
     return new_obj
+
+
+def find_layer_collection_by_name(layer_collection, collection_name):
+    """递归查询集合"""
+    # 如果当前集合名称匹配
+    if layer_collection.name == collection_name:
+        return layer_collection
+
+    # 遍历子集合，递归查找
+    for child in layer_collection.children:
+        result = find_layer_collection_by_name(child, collection_name)
+        if result:
+            return result
+
+    # 如果没有找到匹配的集合，返回 None
+    return None
+
+
+def get_collection(collection_name):
+    """获取指定名称集合，没有则新建，然后激活"""
+    if collection_name in bpy.data.collections:
+        collection = bpy.data.collections[collection_name]
+    else:
+        collection = bpy.data.collections.new(collection_name)
+
+    # 新建和原有集合都可能未被link
+    if collection.name not in bpy.context.scene.collection.children:
+        bpy.context.scene.collection.children.link(collection)
+
+    layer_collection = find_layer_collection_by_name(bpy.context.view_layer.layer_collection, collection_name)
+    bpy.context.view_layer.active_layer_collection = layer_collection
+    return collection
 
 
 def import_vmd(filepath, scale=0.08, margin=0):
@@ -1256,3 +1404,44 @@ def import_vmd(filepath, scale=0.08, margin=0):
         kwargs["create_new_action"] = True
 
     return bpy.ops.mmd_tools.import_vmd('EXEC_DEFAULT', **kwargs)
+
+
+def ensure_object_mode(context):
+    """仅在实际需要时切回物体模式"""
+    if context.view_layer.objects.active is None:
+        return
+    if context.mode != "OBJECT":
+        bpy.ops.object.mode_set(mode='OBJECT')
+
+
+def select_only_objects(context, objects):
+    """只选中给定物体"""
+    view_layer = context.view_layer
+    try:
+        # https://docs.blender.org/api/current/bpy.types.ViewLayer.html#bpy.types.ViewLayer.objects
+        # 刚删掉的对象可能还挂在 view_layer.objects 里（后台同步执行时没有帧间更新），
+        # 遍历会拿到 None 或已失效的引用，这里逐个跳过
+        for obj in view_layer.objects:
+            if obj is None:
+                continue
+            try:
+                if obj.select_get():
+                    obj.select_set(False)
+            except ReferenceError:
+                continue
+        for obj in objects:
+            if obj is None:
+                continue
+            try:
+                obj.select_set(True)
+            except ReferenceError:
+                continue
+        if objects:
+            view_layer.objects.active = objects[-1]
+    except RuntimeError:
+        # RuntimeError: 错误: 物体 'xxx' 不在视图层 'ViewLayer'中, 所以无法选中!
+        pass
+
+
+def is_dummy_bone(name):
+    return name.startswith("_dummy_") or name.startswith("_shadow_")

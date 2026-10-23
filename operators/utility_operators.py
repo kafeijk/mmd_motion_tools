@@ -7,6 +7,47 @@ from .motion_fixer_operators import MotionBaseOperator
 from ..utils import *
 
 
+class GetSelectedBoneNameOperator(bpy.types.Operator):
+    bl_idname = "mmd_motion_tools.get_selected_bone_name"
+    bl_label = "获取选中骨骼名称"
+    bl_description = "获取选中骨骼名称并填充到「自定义拓展」（支持物体模式、姿态模式和编辑模式）\n请按需选择需要获取的骨骼"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        obj = context.active_object
+
+        # 只需为骨架即可，不限于MMD模型
+        if obj is None or obj.type != 'ARMATURE':
+            self.report({'ERROR'}, "请选择骨架！")
+            return {'CANCELLED'}
+
+        # 按骨架当前模式取选中骨骼，避免选择状态未同步
+        if obj.mode == 'EDIT':
+            bones = [bone.name for bone in obj.data.edit_bones if bone.select]
+        else:
+            bones = [pb.name for pb in obj.pose.bones if is_pose_bone_selected(pb)]
+
+        if not bones:
+            self.report({'ERROR'}, "请选择骨骼！")
+            return {'CANCELLED'}
+
+        # 左侧优先、右侧次之，同侧按名称排序，保证每次填充结果一致
+        bones.sort(key=lambda name: (
+            0 if name.endswith(".L") else
+            1 if name.endswith(".R") else
+            2,
+            name
+        ))
+
+        result = ",".join(bones)
+
+        props = context.scene.mmd_motion_tools_detect_clipping
+        if props.custom_bones_str != result:
+            props.custom_bones_str = result
+
+        return {'FINISHED'}
+
+
 class ImportVmdPhysicsOperator(bpy.types.Operator, ImportHelper):
     bl_idname = "mmd_motion_tools.import_vmd_physics"
     bl_label = "导入物理"
@@ -285,7 +326,6 @@ def get_vmd_bones(filepath):
     return list(vmd_file.boneAnimation.keys())
 
 
-@timeit
 def import_vmd_physics(armature, filepath, physical_bones, scale=0.08, margin=0):
     """
     把 VMD 中物理骨骼的关键帧直接写入当前活动骨架的 Action。
@@ -383,7 +423,6 @@ def remove_action(action):
         pass
 
 
-@timeit
 def copy_bone_fcurves(src_action, dst_action, bone_names):
     """将指定骨骼的动画从源 Action 完整覆盖到目标 Action。"""
 
